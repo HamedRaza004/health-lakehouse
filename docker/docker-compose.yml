@@ -49,5 +49,55 @@ services:
       JUPYTER_ENABLE_LAB: "yes"
     command: start-notebook.sh --NotebookApp.token=''
 
+  prefect-server:
+    image: prefecthq/prefect:3-latest   
+    container_name: prefect-server
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+    environment:
+      PREFECT_UI_API_URL: http://localhost:4200/api
+    volumes:
+      - prefect_data:/root/.prefect
+
+  spark:
+    image: apache/spark:3.5.1-python3
+    container_name: spark
+
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+
+    volumes:
+      - ../silver_transform:/app/silver_transform
+      - ../ingestion:/app/ingestion
+
+  spark-worker:
+    image: apache/spark:3.5.1-python3
+    container_name: spark-worker
+
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark:7077
+
+    depends_on:
+      - spark
+
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+
 volumes:
   minio_data:
+  prefect_data:
