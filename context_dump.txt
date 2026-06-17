@@ -1,0 +1,2973 @@
+# Health Lakehouse Context Dump
+
+Generated: 2026-06-15
+Repository root: C:\Users\hamed\Documents\health-lakehouse
+
+Purpose: single-file handoff for another AI. Includes repository structure, inferred Iceberg/database schema, and source/config/notebook contents. Vendor/build/cache directories are excluded.
+
+Excluded directories/patterns: node_modules, .git, .next, __pycache__, .pytest_cache, dist, build, .venv, venv, .mypy_cache, .ruff_cache, .ipynb_checkpoints, .tox, htmlcov, target.
+Sensitive handling: .env values are redacted; variable names are preserved if present.
+
+## File Structure
+
+```text
+health-lakehouse/
+  config/
+  docker/
+  great_expectations/
+  ingestion/
+  notebooks/
+  silver_transform/
+  .env  (239 bytes)
+  .gitignore  (61 bytes)
+  catalog.py  (548 bytes)
+  config/catalog.yml  (214 bytes)
+  docker/boto_check.py  (224 bytes)
+  docker/docker-compose.yml  (2596 bytes)
+  great_expectations/bronze_checks.py  (5234 bytes)
+  great_expectations/ge_runner.py  (3150 bytes)
+  great_expectations/silver_checks.py  (4015 bytes)
+  ingestion/cdc_nndss.py  (6805 bytes)
+  ingestion/daily_flow.py  (8386 bytes)
+  ingestion/fred.py  (2379 bytes)
+  ingestion/openfda.py  (7024 bytes)
+  ingestion/owid.py  (4593 bytes)
+  ingestion/who_gho.py  (5516 bytes)
+  nootbook.ipynb  (938 bytes)
+  notebooks/verify_week1.ipynb  (6718 bytes)
+  notebooks/verify_week2.ipynb  (20326 bytes)
+  README.md  (82 bytes)
+  requirements.txt  (4790 bytes)
+  silver_transform/bronze_to_silver.py  (1050 bytes)
+  silver_transform/cdc_silver.py  (2671 bytes)
+  silver_transform/fda_silver.py  (3054 bytes)
+  silver_transform/fred_silver.py  (1944 bytes)
+  silver_transform/owid_silver.py  (7221 bytes)
+  silver_transform/scd2.py  (1548 bytes)
+  silver_transform/spark_session.py  (2696 bytes)
+  silver_transform/who_silver.py  (2558 bytes)
+```
+
+## Database And Lakehouse Schema
+
+Catalog/runtime: Apache Iceberg REST catalog named `default`/Spark catalog `iceberg`, MinIO/S3 warehouse `s3://lakehouse/`, REST URI default `http://localhost:8181`, MinIO endpoint default `http://localhost:9000`.
+Namespaces created by catalog.py: `bronze`, `silver`, `gold`.
+
+### Bronze Tables
+
+- `bronze.who_gho_raw` at `s3://lakehouse/bronze/who_gho_raw`: `indicator_code string required`, `indicator_name string`, `country_code string`, `country_name string`, `year int`, `value double`, `low double`, `high double`, `sex string`, `_ingested_at string required`, `_source_url string required`, `_ingestion_date string required`.
+- `bronze.cdc_nndss_raw` at `s3://lakehouse/bronze/cdc_nndss_raw`: `reporting_area string`, `year int`, `week int`, `condition string`, `current_week double`, `current_week_flag string`, `previous_52_week_max double`, `previous_52_week_max_flag string`, `cumulative_ytd_current_year double`, `cumulative_ytd_current_year_flag string`, `cumulative_ytd_previous_year double`, `cumulative_ytd_previous_year_flag string`, `location1 string`, `location2 string`, `longitude double`, `latitude double`, `sort_order string`, `_ingested_at string required`, `_source_url string required`, `_ingestion_date string required`.
+- `bronze.owid_covid_raw` at `s3://lakehouse/bronze/owid_covid_raw`: `dataset string required`, `source_row_number int required`, `record_json string required`, `_ingested_at string required`, `_source_url string required`, `_ingestion_date string required`.
+- `bronze.owid_vaccination_raw` at `s3://lakehouse/bronze/owid_vaccination_raw`: same schema as `bronze.owid_covid_raw`.
+- `bronze.openfda_drug_event_raw` at `s3://lakehouse/bronze/openfda_drug_event_raw`: `dataset string required`, `source_row_number int required`, `record_json string required`, `_ingested_at string required`, `_source_url string required`, `_ingestion_date string required`.
+- `bronze.fred_macro_raw` at `s3://lakehouse/bronze/fred_macro_raw`: inferred from pandas/Arrow with `series_id`, `date`, `value`, `_ingested_at`, `_source_url`, `_ingestion_date`; explicit Iceberg schema is not declared in `ingestion/fred.py`.
+
+Note: `ingestion/daily_flow.py` validates `bronze.fda_adverse_events_raw`, but `ingestion/openfda.py` writes `bronze.openfda_drug_event_raw`. `silver_transform/fred_silver.py` expects per-series tables `bronze.fred_unrate_raw`, `bronze.fred_cpiaucsl_raw`, and `bronze.fred_dgs10_raw` with a `record_json` field, while `ingestion/fred.py` writes `bronze.fred_macro_raw` with direct columns. These differences are preserved as current-code context.
+
+### Silver Tables
+
+- `iceberg.silver.who_gho_silver`: derived from WHO bronze after type coercion, country/sex normalization, key deduplication on `indicator_code`, `country_code`, `year`, `sex`, and metadata `_silver_processed_at`, `_silver_version`.
+- `iceberg.silver.cdc_nndss_silver`: derived from CDC bronze after coercion/normalization, deduplication by `condition`, `reporting_area`, `year`, `week`, plus `rolling_avg_cases`, `is_outbreak`, `_silver_processed_at`, `_silver_version`.
+- `iceberg.silver.owid_covid_silver`: extracted from OWID COVID `record_json` with `iso_code`, `location`, `continent`, `date`, case/death/vaccination/hospital metrics, `rolling_7d_avg_cases`, and silver metadata.
+- `iceberg.silver.owid_vaccination_silver`: extracted from OWID vaccination `record_json` with `iso_code`, `location`, `date`, vaccination totals/daily/per-hundred metrics, and silver metadata.
+- `iceberg.silver.openfda_drug_event_silver`: extracted from FDA `record_json` with `report_id`, `drug_name`, `serious`, `receive_date`, `patient_age`, `patient_sex`, `is_serious`, `serious_label`, and silver metadata.
+- `iceberg.silver.fred_unrate_silver`, `iceberg.silver.fred_cpiaucsl_silver`, `iceberg.silver.fred_dgs10_silver`: generated by `silver_transform/fred_silver.py` from expected per-series bronze JSON tables, with `series_id`, `date`, `value`, and silver metadata.
+- `iceberg.silver.who_gho_scd2`: SCD2 table from `who_gho_silver`, keyed by `indicator_code`, `country_code`, `sex`, with `valid_from`, `valid_to`, `is_current`, `_scd_hash`.
+
+## Source Files
+
+### .env
+
+```dotenv
+MINIO_ENDPOINT=<REDACTED>
+MINIO_ACCESS_KEY=<REDACTED>
+MINIO_SECRET_KEY=<REDACTED>
+ICEBERG_REST_URI=<REDACTED>
+FRED_API_KEY=<REDACTED>
+AWS_REGION=<REDACTED>
+AWS_DEFAULT_REGION=<REDACTED>
+```
+
+### .gitignore
+
+```text
+.env
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/
+```
+
+### catalog.py
+
+```python
+from pyiceberg.catalog import load_catalog
+
+catalog = load_catalog(
+    "default",
+    **{
+        "type": "rest",
+        "uri": "http://localhost:8181",
+        "s3.endpoint": "http://localhost:9000",
+        "s3.access-key-id": "minioadmin",
+        "s3.secret-access-key": "minioadmin",
+        "s3.path-style-access": "true",
+    },
+)
+
+catalog.create_namespace("bronze")
+catalog.create_namespace("silver")
+catalog.create_namespace("gold")
+
+print(catalog.list_namespaces())
+# Expected: [('bronze',), ('silver',), ('gold',)]
+
+```
+
+### config/catalog.yml
+
+```yaml
+catalog:
+  default:
+    type: rest
+    uri: http://localhost:8181
+    s3.endpoint: http://localhost:9000
+    s3.access-key-id: minioadmin
+    s3.secret-access-key: minioadmin
+    s3.path-style-access: "true"
+```
+
+### docker/boto_check.py
+
+```python
+import boto3
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://localhost:9000",
+    aws_access_key_id="minioadmin",
+    aws_secret_access_key="minioadmin",
+)
+print(s3.list_buckets())  # should show 'lakehouse'
+
+```
+
+### docker/docker-compose.yml
+
+```yaml
+version: "3.9"
+services:
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD","curl","-f","http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://lakehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_ACCESS__KEY__ID: minioadmin
+      CATALOG_S3_SECRET__ACCESS__KEY: minioadmin
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      CATALOG_S3_REGION: us-east-1
+      AWS_REGION: us-east-1
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  jupyter:
+    image: jupyter/scipy-notebook:latest
+    container_name: jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../notebooks:/home/jovyan/notebooks
+      - ../ingestion:/home/jovyan/ingestion
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+    command: start-notebook.sh --NotebookApp.token=''
+
+  prefect-server:
+    image: prefecthq/prefect:3-latest   
+    container_name: prefect-server
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+    environment:
+      PREFECT_UI_API_URL: http://localhost:4200/api
+    volumes:
+      - prefect_data:/root/.prefect
+
+  spark:
+    image: apache/spark:3.5.1-python3
+    container_name: spark
+
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+
+    volumes:
+      - ../silver_transform:/app/silver_transform
+      - ../ingestion:/app/ingestion
+
+  spark-worker:
+    image: apache/spark:3.5.1-python3
+    container_name: spark-worker
+
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark:7077
+
+    depends_on:
+      - spark
+
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+
+volumes:
+  minio_data:
+  prefect_data:
+
+```
+
+### great_expectations/bronze_checks.py
+
+```python
+from ge_runner import read_table, validate_dataframe
+
+BRONZE_CHECKS = {
+    # --------------------------------------------------
+    # WHO
+    # --------------------------------------------------
+    "bronze.who_gho_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "indicator_code"}},
+        {"type": "expect_column_to_exist", "kwargs": {"column": "_ingested_at"}},
+        {"type": "expect_column_to_exist", "kwargs": {"column": "_source_url"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "indicator_code"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 1000, "max_value": 10000000},
+        },
+    ],
+    # --------------------------------------------------
+    # CDC NNDSS
+    # --------------------------------------------------
+    "bronze.cdc_nndss_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "condition"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "condition"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 100, "max_value": 10000000},
+        },
+    ],
+    # --------------------------------------------------
+    # OWID COVID
+    # --------------------------------------------------
+    "bronze.owid_covid_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "record_json"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "record_json"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 1000, "max_value": 10000000},
+        },
+    ],
+    # --------------------------------------------------
+    # OWID VACCINATION
+    # --------------------------------------------------
+    "bronze.owid_vaccination_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "record_json"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "record_json"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 100, "max_value": 5000000},
+        },
+    ],
+    # --------------------------------------------------
+    # FRED UNRATE
+    # --------------------------------------------------
+    "bronze.fred_unrate_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "record_json"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "record_json"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 10, "max_value": 50000},
+        },
+    ],
+    # --------------------------------------------------
+    # FRED CPIAUCSL
+    # --------------------------------------------------
+    "bronze.fred_cpiaucsl_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "record_json"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "record_json"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 10, "max_value": 50000},
+        },
+    ],
+    # --------------------------------------------------
+    # FRED DGS10
+    # --------------------------------------------------
+    "bronze.fred_dgs10_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "record_json"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "record_json"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 10, "max_value": 50000},
+        },
+    ],
+    # --------------------------------------------------
+    # OPENFDA
+    # --------------------------------------------------
+    "bronze.openfda_drug_event_raw": [
+        {"type": "expect_column_to_exist", "kwargs": {"column": "record_json"}},
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "record_json"},
+        },
+        {
+            "type": "expect_table_row_count_to_be_between",
+            "kwargs": {"min_value": 100, "max_value": 5000000},
+        },
+    ],
+}
+
+
+def run_bronze_checks() -> bool:
+    print("\n--- Bronze quality checks ---")
+
+    all_passed = True
+
+    for table_name, checks in BRONZE_CHECKS.items():
+        try:
+            df = read_table(table_name)
+
+            suite_name = table_name.replace(".", "_")
+
+            passed = validate_dataframe(df, suite_name, checks)
+
+            if not passed:
+                all_passed = False
+
+        except Exception as e:
+            print(f"  [FAIL] {table_name}: {e}")
+            all_passed = False
+
+    return all_passed
+
+
+if __name__ == "__main__":
+    ok = run_bronze_checks()
+
+    print(f"\nBronze gate: {'PASSED' if ok else 'FAILED'}")
+
+```
+
+### great_expectations/ge_runner.py
+
+```python
+import great_expectations as gx
+import pandas as pd
+from pyiceberg.catalog import load_catalog
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CATALOG_CONFIG = {
+    "type": "rest",
+    "uri": os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+    "s3.endpoint": os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+    "s3.access-key-id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    "s3.secret-access-key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+    "s3.path-style-access": "true",
+}
+
+
+def get_catalog():
+    return load_catalog("default", **CATALOG_CONFIG)
+
+
+def read_table(table_name: str) -> pd.DataFrame:
+    catalog = get_catalog()
+    if not catalog.table_exists(table_name):
+        raise ValueError(f"Table not found: {table_name}")
+    return catalog.load_table(table_name).scan().to_pandas()
+
+
+def validate_dataframe(
+    df: pd.DataFrame,
+    suite_name: str,
+    expectations: list[dict],
+) -> bool:
+    """
+    GX 1.x API â€” ephemeral context, pandas datasource.
+    Each expectation is a dict:
+      { "type": "expect_column_to_exist", "kwargs": {"column": "foo"} }
+    Returns True if all pass, False otherwise.
+    """
+    context = gx.get_context()
+
+    # data source + asset â€” unique name per suite to avoid collisions
+    ds_name = f"ds_{suite_name}"
+    asset_name = f"asset_{suite_name}"
+
+    data_source = context.data_sources.add_pandas(name=ds_name)
+    data_asset = data_source.add_dataframe_asset(name=asset_name)
+    batch_definition = data_asset.add_batch_definition_whole_dataframe(
+        name=f"batch_{suite_name}"
+    )
+    batch = batch_definition.get_batch(batch_parameters={"dataframe": df})
+
+    # build expectation suite
+    suite = context.suites.add(gx.ExpectationSuite(name=suite_name))
+    for exp in expectations:
+        exp_type = exp["type"]
+        kwargs = exp.get("kwargs", {})
+        ExpClass = gx.expectations.__dict__.get(
+            "".join(w.capitalize() for w in exp_type.split("_"))
+        )
+        if ExpClass is None:
+            # fallback: use string-based addition
+            suite.add_expectation(
+                gx.expectations.UnexpectedRowsExpectation(
+                    unexpected_rows_query="SELECT 1 WHERE FALSE"
+                )
+            )
+        else:
+            suite.add_expectation(ExpClass(**kwargs))
+
+    # validation definition + run
+    validation_def = context.validation_definitions.add(
+        gx.ValidationDefinition(
+            name=f"val_{suite_name}",
+            data=batch_definition,
+            suite=suite,
+        )
+    )
+    results = validation_def.run(batch_parameters={"dataframe": df})
+
+    passed = results.success
+    success_count = sum(1 for r in results.results if r.success)
+    total_count = len(results.results)
+    status = "PASS" if passed else "FAIL"
+    print(f"  [{status}] {suite_name}: {success_count}/{total_count} checks passed")
+
+    if not passed:
+        for r in results.results:
+            if not r.success:
+                print(f"    FAILED: {r.expectation_config.type}")
+
+    return passed
+
+```
+
+### great_expectations/silver_checks.py
+
+```python
+from ge_runner import read_table, validate_dataframe
+
+SILVER_CHECKS = {
+    "silver.who_gho_silver": [
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "country_code"},
+        },
+        {"type": "expect_column_values_to_not_be_null", "kwargs": {"column": "year"}},
+        {
+            "type": "expect_column_values_to_match_regex",
+            "kwargs": {
+                "column": "country_code",
+                "regex": r"^[A-Z]{2,3}$",
+                "mostly": 0.9,
+            },
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "value",
+                "min_value": 0,
+                "max_value": 100000,
+                "mostly": 0.95,
+            },
+        },
+    ],
+    "silver.cdc_nndss_silver": [
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "condition"},
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "current_week",
+                "min_value": 0,
+                "max_value": 20000,
+                "mostly": 0.10,
+            },
+        },
+    ],
+    "silver.owid_covid_silver": [
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "iso_code"},
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "new_cases",
+                "min_value": 0,
+                "max_value": 10_000_000,
+                "mostly": 0.98,
+            },
+        },
+    ],
+    "silver.owid_vaccination_silver": [
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "iso_code"},
+        },
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {
+                "column": "total_vaccinations",
+                "min_value": 0,
+                "max_value": 10_000_000_000,
+                "mostly": 0.95,
+            },
+        },
+    ],
+    "silver.fred_unrate_silver": [
+        {"type": "expect_column_values_to_not_be_null", "kwargs": {"column": "value"}},
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {"column": "value", "min_value": 0, "max_value": 30},
+        },
+    ],
+    "silver.fred_cpiaucsl_silver": [
+        {"type": "expect_column_values_to_not_be_null", "kwargs": {"column": "value"}},
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {"column": "value", "min_value": 0, "max_value": 500},
+        },
+    ],
+    "silver.fred_dgs10_silver": [
+        {"type": "expect_column_values_to_not_be_null", "kwargs": {"column": "value"}},
+        {
+            "type": "expect_column_values_to_be_between",
+            "kwargs": {"column": "value", "min_value": -5, "max_value": 25},
+        },
+    ],
+    "silver.openfda_drug_event_silver": [
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "drug_name"},
+        },
+        {
+            "type": "expect_column_values_to_not_be_null",
+            "kwargs": {"column": "report_id"},
+        },
+    ],
+}
+
+
+def run_silver_checks() -> bool:
+    print("\n--- Silver quality checks ---")
+    all_passed = True
+    for table_name, checks in SILVER_CHECKS.items():
+        try:
+            df = read_table(table_name)
+            suite_name = table_name.replace(".", "_")
+            passed = validate_dataframe(df, suite_name, checks)
+            if not passed:
+                all_passed = False
+        except ValueError as e:
+            print(f"  [SKIP] {table_name}: {e}")
+    return all_passed
+
+
+if __name__ == "__main__":
+    ok = run_silver_checks()
+    print(f"\nSilver gate: {'PASSED' if ok else 'FAILED'}")
+
+```
+
+### ingestion/cdc_nndss.py
+
+```python
+import os
+from datetime import datetime, timezone
+
+import pandas as pd
+import pyarrow as pa
+import requests
+from pyiceberg.catalog import load_catalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import DoubleType, IntegerType, NestedField, StringType
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CATALOG_CONFIG = {
+    "type": "rest",
+    "uri": os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+    "s3.endpoint": os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+    "s3.access-key-id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    "s3.secret-access-key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+    "s3.path-style-access": "true",
+}
+
+CDC_URL = "https://data.cdc.gov/resource/x9gk-5huc.json"
+
+BRONZE_SCHEMA = Schema(
+    NestedField(1, "reporting_area", StringType(), required=False),
+    NestedField(2, "year", IntegerType(), required=False),
+    NestedField(3, "week", IntegerType(), required=False),
+    NestedField(4, "condition", StringType(), required=False),
+    NestedField(5, "current_week", DoubleType(), required=False),
+    NestedField(6, "current_week_flag", StringType(), required=False),
+    NestedField(7, "previous_52_week_max", DoubleType(), required=False),
+    NestedField(8, "previous_52_week_max_flag", StringType(), required=False),
+    NestedField(9, "cumulative_ytd_current_year", DoubleType(), required=False),
+    NestedField(10, "cumulative_ytd_current_year_flag", StringType(), required=False),
+    NestedField(11, "cumulative_ytd_previous_year", DoubleType(), required=False),
+    NestedField(12, "cumulative_ytd_previous_year_flag", StringType(), required=False),
+    NestedField(13, "location1", StringType(), required=False),
+    NestedField(14, "location2", StringType(), required=False),
+    NestedField(15, "longitude", DoubleType(), required=False),
+    NestedField(16, "latitude", DoubleType(), required=False),
+    NestedField(17, "sort_order", StringType(), required=False),
+    NestedField(18, "_ingested_at", StringType(), required=True),
+    NestedField(19, "_source_url", StringType(), required=True),
+    NestedField(20, "_ingestion_date", StringType(), required=True),
+)
+
+ARROW_SCHEMA = pa.schema(
+    [
+        pa.field("reporting_area", pa.string(), nullable=True),
+        pa.field("year", pa.int32(), nullable=True),
+        pa.field("week", pa.int32(), nullable=True),
+        pa.field("condition", pa.string(), nullable=True),
+        pa.field("current_week", pa.float64(), nullable=True),
+        pa.field("current_week_flag", pa.string(), nullable=True),
+        pa.field("previous_52_week_max", pa.float64(), nullable=True),
+        pa.field("previous_52_week_max_flag", pa.string(), nullable=True),
+        pa.field("cumulative_ytd_current_year", pa.float64(), nullable=True),
+        pa.field("cumulative_ytd_current_year_flag", pa.string(), nullable=True),
+        pa.field("cumulative_ytd_previous_year", pa.float64(), nullable=True),
+        pa.field("cumulative_ytd_previous_year_flag", pa.string(), nullable=True),
+        pa.field("location1", pa.string(), nullable=True),
+        pa.field("location2", pa.string(), nullable=True),
+        pa.field("longitude", pa.float64(), nullable=True),
+        pa.field("latitude", pa.float64(), nullable=True),
+        pa.field("sort_order", pa.string(), nullable=True),
+        pa.field("_ingested_at", pa.string(), nullable=False),
+        pa.field("_source_url", pa.string(), nullable=False),
+        pa.field("_ingestion_date", pa.string(), nullable=False),
+    ]
+)
+
+
+def parse_int(value):
+    parsed = pd.to_numeric(value, errors="coerce")
+    return None if pd.isna(parsed) else int(parsed)
+
+
+def parse_float(value):
+    parsed = pd.to_numeric(value, errors="coerce")
+    return None if pd.isna(parsed) else float(parsed)
+
+
+def parse_point(point: dict | None) -> tuple[float | None, float | None]:
+    if not isinstance(point, dict):
+        return None, None
+
+    coordinates = point.get("coordinates") or []
+    if len(coordinates) < 2:
+        return None, None
+
+    return parse_float(coordinates[0]), parse_float(coordinates[1])
+
+
+def fetch_cdc(limit=5000) -> list[dict]:
+    records, offset = [], 0
+    while True:
+        resp = requests.get(
+            CDC_URL, params={"$limit": limit, "$offset": offset}, timeout=30
+        )
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        records.extend(batch)
+        offset += limit
+        print(f"  Fetched {len(records)} records so far...")
+    return records
+
+
+def parse_cdc(raw: list[dict]) -> pd.DataFrame:
+    now = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = []
+    for r in raw:
+        longitude, latitude = parse_point(r.get("geocode"))
+        rows.append(
+            {
+                "reporting_area": r.get("states"),
+                "year": parse_int(r.get("year")),
+                "week": parse_int(r.get("week")),
+                "condition": r.get("label"),
+                "current_week": parse_float(r.get("m1")),
+                "current_week_flag": r.get("m1_flag"),
+                "previous_52_week_max": parse_float(r.get("m2")),
+                "previous_52_week_max_flag": r.get("m2_flag"),
+                "cumulative_ytd_current_year": parse_float(r.get("m3")),
+                "cumulative_ytd_current_year_flag": r.get("m3_flag"),
+                "cumulative_ytd_previous_year": parse_float(r.get("m4")),
+                "cumulative_ytd_previous_year_flag": r.get("m4_flag"),
+                "location1": r.get("location1"),
+                "location2": r.get("location2"),
+                "longitude": longitude,
+                "latitude": latitude,
+                "sort_order": r.get("sort_order"),
+                "_ingested_at": now,
+                "_source_url": CDC_URL,
+                "_ingestion_date": today,
+            }
+        )
+    return pd.DataFrame(rows, columns=ARROW_SCHEMA.names)
+
+
+def run():
+    catalog = load_catalog("default", **CATALOG_CONFIG)
+    print("Fetching CDC NNDSS data...")
+    raw = fetch_cdc()
+    df = parse_cdc(raw)
+    print(f"Total records: {len(df)}")
+    arrow_table = pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False)
+    table_name = "bronze.cdc_nndss_raw"
+    if catalog.table_exists(table_name):
+        catalog.load_table(table_name).append(arrow_table)
+    else:
+        tbl = catalog.create_table(
+            table_name,
+            schema=BRONZE_SCHEMA,
+            location="s3://lakehouse/bronze/cdc_nndss_raw",
+        )
+        tbl.append(arrow_table)
+    print("Done.")
+
+
+if __name__ == "__main__":
+    run()
+
+```
+
+### ingestion/daily_flow.py
+
+```python
+from prefect import flow, task, get_run_logger
+from prefect.tasks import task_input_hash
+from datetime import timedelta, datetime, timezone
+from pathlib import Path
+import os
+
+import who_gho
+import cdc_nndss
+import owid
+import fred
+import openfda
+
+# ---------------------------------------------------------------------------
+# Local cache directory â€” sits next to this file at runtime
+# ---------------------------------------------------------------------------
+CACHE_DIR = Path(os.getenv("INGESTION_CACHE_DIR", "/tmp/ingestion_cache"))
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+CACHE_TTL_HOURS = int(os.getenv("CACHE_TTL_HOURS", "20"))
+
+
+def _cache_is_fresh(path: Path, ttl_hours: int = CACHE_TTL_HOURS) -> bool:
+    """Return True if the cache file exists and is younger than ttl_hours."""
+    if not path.exists():
+        return False
+    age = datetime.now(timezone.utc).timestamp() - path.stat().st_mtime
+    return age < ttl_hours * 3600
+
+
+# ---------------------------------------------------------------------------
+# FIX 3 â€” Safe bronze validation (no full table scan into memory)
+# ---------------------------------------------------------------------------
+def _safe_table_info(catalog, table_name: str, logger) -> None:
+    """
+    Log table existence and snapshot metadata only.
+    Never calls .scan().to_arrow() â€” avoids loading entire table into RAM.
+    """
+    if not catalog.table_exists(table_name):
+        logger.warning(f"MISSING TABLE: {table_name}")
+        return
+
+    tbl = catalog.load_table(table_name)
+    snap = tbl.current_snapshot()
+
+    if snap is None:
+        logger.info(f"{table_name}: table exists but has no snapshots yet")
+        return
+
+    # Summary metrics come from Iceberg snapshot summary â€” zero data loaded
+    summary = snap.summary or {}
+    added_rows = summary.get("added-records", "?")
+    total_records = summary.get("total-records", "?")
+    added_files = summary.get("added-data-files", "?")
+    total_files = summary.get("total-data-files", "?")
+
+    logger.info(
+        f"{table_name}: snapshot {snap.snapshot_id} | "
+        f"total_records={total_records} | added_records={added_rows} | "
+        f"total_files={total_files} | added_files={added_files}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helper â€” FIX 2: drop-and-recreate so daily runs never duplicate rows
+# ---------------------------------------------------------------------------
+def _replace_table(catalog, table_name: str, logger) -> None:
+    """
+    Drop the bronze table if it exists so the ingestion script can recreate it
+    fresh.  This eliminates the append-duplication problem for sources that
+    deliver full historical snapshots on every fetch (OWID, CDC, FDA).
+    """
+    if catalog.table_exists(table_name):
+        catalog.drop_table(table_name)
+        logger.info(f"Dropped existing table {table_name} â€” will recreate fresh")
+
+
+def _get_catalog():
+    from pyiceberg.catalog import load_catalog
+
+    return load_catalog(
+        "default",
+        **{
+            "type": "rest",
+            "uri": os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+            "s3.endpoint": os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+            "s3.access-key-id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+            "s3.secret-access-key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+            "s3.path-style-access": "true",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ingestion tasks
+# ---------------------------------------------------------------------------
+
+# FIX 3 â€” cache_key_fn + cache_expiration applied to ALL heavy sources
+_heavy_task_kwargs = dict(
+    retries=3,
+    retry_delay_seconds=60,
+    cache_key_fn=task_input_hash,
+    cache_expiration=timedelta(hours=CACHE_TTL_HOURS),
+)
+
+
+@task(name="ingest-who-gho", **_heavy_task_kwargs)
+def ingest_who():
+    logger = get_run_logger()
+    sentinel = CACHE_DIR / "who_gho.done"
+
+    # Cache guard â€” skip the API call if we ran successfully within TTL
+    if _cache_is_fresh(sentinel):
+        logger.info(f"WHO GHO: ran recently (sentinel fresh), skipping fetch")
+        return
+
+    logger.info("WHO GHO: fetching from API")
+    catalog = _get_catalog()
+    _replace_table(catalog, "bronze.who_gho_raw", logger)
+    who_gho.run()  # â† unchanged â€” no new args
+    sentinel.touch()  # mark success for next TTL window
+    logger.info("WHO GHO ingestion complete")
+
+
+@task(name="ingest-cdc-nndss", **_heavy_task_kwargs)
+def ingest_cdc():
+    logger = get_run_logger()
+    sentinel = CACHE_DIR / "cdc_nndss.done"
+
+    if _cache_is_fresh(sentinel):
+        logger.info("CDC NNDSS: ran recently, skipping fetch")
+        return
+
+    logger.info("CDC NNDSS: fetching from API")
+    catalog = _get_catalog()
+    _replace_table(catalog, "bronze.cdc_nndss_raw", logger)
+    cdc_nndss.run()  # â† unchanged
+    sentinel.touch()
+    logger.info("CDC NNDSS ingestion complete")
+
+
+@task(name="ingest-owid", **_heavy_task_kwargs)
+def ingest_owid():
+    logger = get_run_logger()
+    sentinel = CACHE_DIR / "owid.done"
+
+    if _cache_is_fresh(sentinel):
+        logger.info("OWID: ran recently, skipping fetch")
+        return
+
+    logger.info("OWID: fetching from API")
+    catalog = _get_catalog()
+    _replace_table(catalog, "bronze.owid_covid_raw", logger)
+    _replace_table(catalog, "bronze.owid_vaccination_raw", logger)
+    owid.run()  # â† unchanged
+    sentinel.touch()
+    logger.info("OWID ingestion complete")
+
+
+# FRED is incremental â€” append is correct, no drop-and-recreate needed
+@task(name="ingest-fred", retries=3, retry_delay_seconds=60)
+def ingest_fred():
+    logger = get_run_logger()
+    logger.info("Starting FRED ingestion")
+    fred.run()  # â† unchanged
+    logger.info("FRED ingestion complete")
+
+
+@task(name="ingest-openfda", **_heavy_task_kwargs)
+def ingest_openfda():
+    logger = get_run_logger()
+    sentinel = CACHE_DIR / "openfda.done"
+
+    if _cache_is_fresh(sentinel):
+        logger.info("OpenFDA: ran recently, skipping fetch")
+        return
+
+    logger.info("OpenFDA: fetching from API")
+    catalog = _get_catalog()
+    _replace_table(catalog, "bronze.fda_adverse_events_raw", logger)
+    openfda.run()  # â† unchanged
+    sentinel.touch()
+    logger.info("OpenFDA ingestion complete")
+
+
+@task(name="validate-bronze-counts")
+def validate_bronze_counts():
+    """
+    FIX 1 â€” Safe validation using Iceberg snapshot metadata only.
+    No .scan().to_arrow() â€” no data loaded into memory.
+    """
+    catalog = _get_catalog()
+    logger = get_run_logger()
+    tables = [
+        "bronze.who_gho_raw",
+        "bronze.cdc_nndss_raw",
+        "bronze.owid_covid_raw",
+        "bronze.owid_vaccination_raw",
+        "bronze.fred_macro_raw",
+        "bronze.fda_adverse_events_raw",
+    ]
+    for t in tables:
+        _safe_table_info(catalog, t, logger)
+
+
+# ---------------------------------------------------------------------------
+# Flow â€” FIX 4: safer parallelism strategy
+# ---------------------------------------------------------------------------
+
+
+@flow(
+    name="daily-health-ingestion",
+    description="Ingest all public health sources into bronze Iceberg tables",
+)
+def daily_ingestion_flow():
+    logger = get_run_logger()
+    logger.info("Starting daily ingestion flow")
+
+    # FIX 4 â€” Parallelism strategy:
+    #
+    #   PARALLEL  : WHO + FRED  â€” lightweight payloads, low RAM, low rate-limit risk
+    #   SEQUENTIAL: CDC â†’ OWID â†’ OpenFDA â€” large downloads, run one at a time
+    #               to avoid RAM exhaustion and simultaneous API rate-limit hits
+    #
+    who_future = ingest_who.submit()
+    fred_future = ingest_fred.submit()
+
+    # Wait for the light tasks to finish first
+    who_future.result(raise_on_failure=False)
+    fred_future.result(raise_on_failure=False)
+
+    # Heavy tasks run sequentially to protect memory and API quotas
+    ingest_cdc()
+    ingest_owid()
+    ingest_openfda()
+
+    validate_bronze_counts()
+    logger.info("Daily ingestion flow complete")
+
+
+if __name__ == "__main__":
+    daily_ingestion_flow()
+
+```
+
+### ingestion/fred.py
+
+```python
+import requests, pandas as pd, pyarrow as pa, os
+from pyiceberg.catalog import load_catalog
+from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CATALOG_CONFIG = {
+    "type": "rest",
+    "uri": os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+    "s3.endpoint": os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+    "s3.access-key-id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    "s3.secret-access-key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+    "s3.path-style-access": "true",
+}
+
+FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
+FRED_API_KEY = os.getenv("FRED_API_KEY")
+SERIES_IDS = ["HLTHSCPCHCSA", "PPAACH", "UNRATE", "GDPC1", "POPTHM"]
+
+
+def fetch_series(series_id: str) -> list[dict]:
+    resp = requests.get(
+        FRED_BASE,
+        params={
+            "series_id": series_id,
+            "api_key": FRED_API_KEY,
+            "file_type": "json",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json().get("observations", [])
+
+
+def run():
+    catalog = load_catalog("default", **CATALOG_CONFIG)
+    now = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    all_rows = []
+    for sid in SERIES_IDS:
+        print(f"  Fetching FRED series: {sid}")
+        obs = fetch_series(sid)
+        for o in obs:
+            all_rows.append(
+                {
+                    "series_id": sid,
+                    "date": o.get("date"),
+                    "value": float(o["value"])
+                    if o.get("value") not in [".", None]
+                    else None,
+                    "_ingested_at": now,
+                    "_source_url": FRED_BASE,
+                    "_ingestion_date": today,
+                }
+            )
+    df = pd.DataFrame(all_rows)
+    print(f"Total FRED rows: {len(df)}")
+    arrow_table = pa.Table.from_pandas(df, preserve_index=False)
+    table_name = "bronze.fred_macro_raw"
+    if catalog.table_exists(table_name):
+        catalog.load_table(table_name).append(arrow_table)
+    else:
+        tbl = catalog.create_table(
+            table_name, schema=None, location="s3://lakehouse/bronze/fred_macro_raw"
+        )
+        tbl.append(arrow_table)
+    print("Done.")
+
+
+if __name__ == "__main__":
+    run()
+
+```
+
+### ingestion/openfda.py
+
+```python
+import json
+import math
+import os
+from datetime import datetime, timezone
+
+import pandas as pd
+import pyarrow as pa
+import requests
+from dotenv import load_dotenv
+from pyiceberg.catalog import load_catalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import IntegerType, NestedField, StringType
+
+load_dotenv()
+
+CATALOG_CONFIG = {
+    "type": "rest",
+    "uri": os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+    "s3.endpoint": os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+    "s3.access-key-id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    "s3.secret-access-key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+    "s3.path-style-access": "true",
+}
+
+OPENFDA_SOURCES = {
+    "drug_event": "https://api.fda.gov/drug/event.json",
+}
+
+DEFAULT_TARGET_RECORDS = 5000
+DEFAULT_API_KEY_LIMIT = 1000
+DEFAULT_ANONYMOUS_LIMIT = 100
+MAX_OPENFDA_LIMIT = 1000
+REQUEST_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": os.getenv("OPENFDA_USER_AGENT", "Mozilla/5.0"),
+}
+
+BRONZE_SCHEMA = Schema(
+    NestedField(1, "dataset", StringType(), required=True),
+    NestedField(2, "source_row_number", IntegerType(), required=True),
+    NestedField(3, "record_json", StringType(), required=True),
+    NestedField(4, "_ingested_at", StringType(), required=True),
+    NestedField(5, "_source_url", StringType(), required=True),
+    NestedField(6, "_ingestion_date", StringType(), required=True),
+)
+
+ARROW_SCHEMA = pa.schema(
+    [
+        pa.field("dataset", pa.string(), nullable=False),
+        pa.field("source_row_number", pa.int32(), nullable=False),
+        pa.field("record_json", pa.string(), nullable=False),
+        pa.field("_ingested_at", pa.string(), nullable=False),
+        pa.field("_source_url", pa.string(), nullable=False),
+        pa.field("_ingestion_date", pa.string(), nullable=False),
+    ]
+)
+
+EXPECTED_COLUMNS = [field.name for field in BRONZE_SCHEMA.fields]
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+
+
+def default_limit(api_key: str | None) -> int:
+    return DEFAULT_API_KEY_LIMIT if api_key else DEFAULT_ANONYMOUS_LIMIT
+
+
+def openfda_error(resp: requests.Response, limit: int) -> RuntimeError:
+    body = resp.text[:500].replace("\n", " ")
+    return RuntimeError(
+        f"OpenFDA request failed with HTTP {resp.status_code} using limit={limit}. "
+        "If this keeps happening, set OPENFDA_API_KEY in .env or lower "
+        f"OPENFDA_LIMIT. Response body: {body}"
+    )
+
+
+def fetch_openfda(name: str, url: str) -> list[dict]:
+    api_key = os.getenv("OPENFDA_API_KEY")
+    limit = min(max(env_int("OPENFDA_LIMIT", default_limit(api_key)), 1), MAX_OPENFDA_LIMIT)
+    target_records = max(env_int("OPENFDA_TARGET_RECORDS", DEFAULT_TARGET_RECORDS), 1)
+    max_pages_configured = bool(os.getenv("OPENFDA_MAX_PAGES"))
+    max_pages = max(
+        env_int("OPENFDA_MAX_PAGES", math.ceil(target_records / limit)),
+        1,
+    )
+    search = os.getenv(f"OPENFDA_{name.upper()}_SEARCH") or os.getenv("OPENFDA_SEARCH")
+
+    records = []
+    page = 0
+    skip = 0
+    while page < max_pages and len(records) < target_records:
+        page += 1
+        page_limit = min(limit, target_records - len(records))
+        params = {"limit": page_limit, "skip": skip}
+        if api_key:
+            params["api_key"] = api_key
+        if search:
+            params["search"] = search
+
+        print(f"  Fetching OpenFDA {name}: page {page}/{max_pages}")
+        resp = requests.get(url, params=params, headers=REQUEST_HEADERS, timeout=60)
+        if resp.status_code == 403 and not api_key and page_limit > DEFAULT_ANONYMOUS_LIMIT:
+            print(
+                "  OpenFDA rejected the larger anonymous page size; "
+                f"retrying with limit={DEFAULT_ANONYMOUS_LIMIT}"
+            )
+            limit = DEFAULT_ANONYMOUS_LIMIT
+            page_limit = min(limit, target_records - len(records))
+            params["limit"] = page_limit
+            if not max_pages_configured:
+                remaining = target_records - len(records)
+                max_pages = page - 1 + math.ceil(remaining / limit)
+            resp = requests.get(url, params=params, headers=REQUEST_HEADERS, timeout=60)
+
+        if resp.status_code == 404:
+            break
+        if resp.status_code == 403:
+            raise openfda_error(resp, page_limit)
+        resp.raise_for_status()
+
+        batch = resp.json().get("results", [])
+        if not batch:
+            break
+
+        records.extend(batch)
+        skip += page_limit
+        if len(batch) < page_limit:
+            break
+
+    return records
+
+
+def parse_openfda(records: list[dict], name: str, url: str) -> pd.DataFrame:
+    now = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    rows = []
+    for row_number, record in enumerate(records, start=1):
+        rows.append(
+            {
+                "dataset": name,
+                "source_row_number": row_number,
+                "record_json": json.dumps(record, sort_keys=True, default=str),
+                "_ingested_at": now,
+                "_source_url": url,
+                "_ingestion_date": today,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=ARROW_SCHEMA.names)
+
+
+def write_to_bronze(df: pd.DataFrame, catalog, table_name: str, location: str):
+    arrow_table = pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False)
+
+    if catalog.table_exists(table_name):
+        tbl = catalog.load_table(table_name)
+        current_columns = [field.name for field in tbl.schema().fields]
+        if current_columns != EXPECTED_COLUMNS:
+            raise RuntimeError(
+                f"{table_name} already exists with an incompatible schema. "
+                "Drop or rename the old table, then rerun this ingester."
+            )
+        tbl.append(arrow_table)
+        print(f"  Appended {len(df)} rows to {table_name}")
+    else:
+        tbl = catalog.create_table(
+            table_name,
+            schema=BRONZE_SCHEMA,
+            location=location,
+        )
+        tbl.append(arrow_table)
+        print(f"  Created {table_name} and wrote {len(df)} rows")
+
+
+def run():
+    catalog = load_catalog("default", **CATALOG_CONFIG)
+    for name, url in OPENFDA_SOURCES.items():
+        records = fetch_openfda(name, url)
+        df = parse_openfda(records, name, url)
+        print(f"  {name}: {len(df)} records")
+        write_to_bronze(
+            df,
+            catalog,
+            table_name=f"bronze.openfda_{name}_raw",
+            location=f"s3://lakehouse/bronze/openfda_{name}_raw",
+        )
+    print("Done.")
+
+
+if __name__ == "__main__":
+    run()
+
+```
+
+### ingestion/owid.py
+
+```python
+import json
+import os
+from datetime import datetime, timezone
+from io import StringIO
+
+import pandas as pd
+import pyarrow as pa
+import requests
+from dotenv import load_dotenv
+from pyiceberg.catalog import load_catalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import IntegerType, NestedField, StringType
+
+load_dotenv()
+
+CATALOG_CONFIG = {
+    "type": "rest",
+    "uri": os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+    "s3.endpoint": os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+    "s3.access-key-id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    "s3.secret-access-key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+    "s3.path-style-access": "true",
+}
+
+OWID_SOURCES = {
+    "covid": "https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/owid-covid-data.csv",
+    "vaccination": "https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/vaccinations.csv",
+}
+
+BRONZE_SCHEMA = Schema(
+    NestedField(1, "dataset", StringType(), required=True),
+    NestedField(2, "source_row_number", IntegerType(), required=True),
+    NestedField(3, "record_json", StringType(), required=True),
+    NestedField(4, "_ingested_at", StringType(), required=True),
+    NestedField(5, "_source_url", StringType(), required=True),
+    NestedField(6, "_ingestion_date", StringType(), required=True),
+)
+
+ARROW_SCHEMA = pa.schema(
+    [
+        pa.field("dataset", pa.string(), nullable=False),
+        pa.field("source_row_number", pa.int32(), nullable=False),
+        pa.field("record_json", pa.string(), nullable=False),
+        pa.field("_ingested_at", pa.string(), nullable=False),
+        pa.field("_source_url", pa.string(), nullable=False),
+        pa.field("_ingestion_date", pa.string(), nullable=False),
+    ]
+)
+
+EXPECTED_COLUMNS = [field.name for field in BRONZE_SCHEMA.fields]
+
+
+def normalize_column_name(column_name: str) -> str:
+    return column_name.strip().lower().replace(" ", "_")
+
+
+def fetch_owid(name: str, url: str) -> pd.DataFrame:
+    print(f"  Fetching OWID {name} from {url}")
+    resp = requests.get(url, timeout=60)
+    resp.raise_for_status()
+
+    df = pd.read_csv(StringIO(resp.text), low_memory=False)
+    df.columns = [normalize_column_name(column) for column in df.columns]
+    return df
+
+
+def parse_owid(df: pd.DataFrame, name: str, url: str) -> pd.DataFrame:
+    now = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    clean_df = df.astype(object).where(pd.notna(df), None)
+
+    rows = []
+    for row_number, record in enumerate(clean_df.to_dict(orient="records"), start=1):
+        rows.append(
+            {
+                "dataset": name,
+                "source_row_number": row_number,
+                "record_json": json.dumps(record, sort_keys=True, default=str),
+                "_ingested_at": now,
+                "_source_url": url,
+                "_ingestion_date": today,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=ARROW_SCHEMA.names)
+
+
+def write_to_bronze(df: pd.DataFrame, catalog, table_name: str, location: str):
+    arrow_table = pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False)
+
+    if catalog.table_exists(table_name):
+        tbl = catalog.load_table(table_name)
+        current_columns = [field.name for field in tbl.schema().fields]
+        if current_columns != EXPECTED_COLUMNS:
+            raise RuntimeError(
+                f"{table_name} already exists with an incompatible schema. "
+                "Drop or rename the old table, then rerun this ingester."
+            )
+        tbl.append(arrow_table)
+        print(f"  Appended {len(df)} rows to {table_name}")
+    else:
+        tbl = catalog.create_table(
+            table_name,
+            schema=BRONZE_SCHEMA,
+            location=location,
+        )
+        tbl.append(arrow_table)
+        print(f"  Created {table_name} and wrote {len(df)} rows")
+
+
+def run():
+    catalog = load_catalog("default", **CATALOG_CONFIG)
+    for name, url in OWID_SOURCES.items():
+        raw_df = fetch_owid(name, url)
+        bronze_df = parse_owid(raw_df, name, url)
+        print(f"  {name}: {len(bronze_df)} rows, {len(raw_df.columns)} source columns")
+        write_to_bronze(
+            bronze_df,
+            catalog,
+            table_name=f"bronze.owid_{name}_raw",
+            location=f"s3://lakehouse/bronze/owid_{name}_raw",
+        )
+    print("Done.")
+
+
+if __name__ == "__main__":
+    run()
+
+```
+
+### ingestion/who_gho.py
+
+```python
+import requests
+import pandas as pd
+import pyarrow as pa
+from pyiceberg.catalog import load_catalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import (
+    NestedField,
+    StringType,
+    DoubleType,
+    IntegerType,
+    TimestampType,
+)
+from datetime import datetime, timezone
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+CATALOG_CONFIG = {
+    "type": "rest",
+    "uri": os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+    "s3.endpoint": os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+    "s3.access-key-id": os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    "s3.secret-access-key": os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+    "s3.path-style-access": "true",
+}
+
+WHO_BASE = "https://ghoapi.azureedge.net/api"
+INDICATORS = ["WHS4_100", "MDG_0000000001", "WHOSIS_000001"]
+
+BRONZE_SCHEMA = Schema(
+    NestedField(1, "indicator_code", StringType(), required=True),
+    NestedField(2, "indicator_name", StringType(), required=False),
+    NestedField(3, "country_code", StringType(), required=False),
+    NestedField(4, "country_name", StringType(), required=False),
+    NestedField(5, "year", IntegerType(), required=False),
+    NestedField(6, "value", DoubleType(), required=False),
+    NestedField(7, "low", DoubleType(), required=False),
+    NestedField(8, "high", DoubleType(), required=False),
+    NestedField(9, "sex", StringType(), required=False),
+    NestedField(10, "_ingested_at", StringType(), required=True),
+    NestedField(11, "_source_url", StringType(), required=True),
+    NestedField(12, "_ingestion_date", StringType(), required=True),
+)
+
+ARROW_SCHEMA = pa.schema(
+    [
+        pa.field("indicator_code", pa.string(), nullable=False),
+        pa.field("indicator_name", pa.string(), nullable=True),
+        pa.field("country_code", pa.string(), nullable=True),
+        pa.field("country_name", pa.string(), nullable=True),
+        pa.field("year", pa.int32(), nullable=True),
+        pa.field("value", pa.float64(), nullable=True),
+        pa.field("low", pa.float64(), nullable=True),
+        pa.field("high", pa.float64(), nullable=True),
+        pa.field("sex", pa.string(), nullable=True),
+        pa.field("_ingested_at", pa.string(), nullable=False),
+        pa.field("_source_url", pa.string(), nullable=False),
+        pa.field("_ingestion_date", pa.string(), nullable=False),
+    ]
+)
+
+
+def fetch_indicator(indicator_code: str) -> list[dict]:
+    url = f"{WHO_BASE}/{indicator_code}"
+    print(f"  Fetching {url}")
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("value", [])
+
+
+def parse_records(
+    raw: list[dict], indicator_code: str, source_url: str
+) -> pd.DataFrame:
+    now = datetime.now(timezone.utc).isoformat()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = []
+    for r in raw:
+        rows.append(
+            {
+                "indicator_code": indicator_code,
+                "indicator_name": r.get("IndicatorName"),
+                "country_code": r.get("SpatialDim"),
+                "country_name": r.get("SpatialDim"),
+                "year": r.get("TimeDim"),
+                "value": r.get("NumericValue"),
+                "low": r.get("Low"),
+                "high": r.get("High"),
+                "sex": r.get("Dim1"),
+                "_ingested_at": now,
+                "_source_url": source_url,
+                "_ingestion_date": today,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def write_to_bronze(df: pd.DataFrame, catalog):
+    table_name = "bronze.who_gho_raw"
+    # Required string columns
+    required_cols = ["indicator_code", "_ingested_at", "_source_url", "_ingestion_date"]
+
+    for col in required_cols:
+        df[col] = df[col].fillna("").astype(str)
+
+    # Optional string columns
+    string_cols = ["indicator_name", "country_code", "country_name", "sex"]
+
+    for col in string_cols:
+        df[col] = df[col].astype("string")
+
+    # Integer column
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int32")
+
+    # Float columns
+    float_cols = ["value", "low", "high"]
+
+    for col in float_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    arrow_table = pa.Table.from_pandas(
+        df,
+        schema=ARROW_SCHEMA,
+        preserve_index=False,
+    )
+
+    if catalog.table_exists(table_name):
+        tbl = catalog.load_table(table_name)
+        tbl.append(arrow_table)
+        print(f"  Appended {len(df)} rows to {table_name}")
+    else:
+        tbl = catalog.create_table(
+            table_name,
+            schema=BRONZE_SCHEMA,
+            location="s3://lakehouse/bronze/who_gho_raw",
+        )
+        tbl.append(arrow_table)
+        print(f"  Created {table_name} and wrote {len(df)} rows")
+
+
+def run():
+    print("Connecting to Iceberg catalog...")
+    catalog = load_catalog("default", **CATALOG_CONFIG)
+
+    all_dfs = []
+    for code in INDICATORS:
+        url = f"{WHO_BASE}/{code}"
+        print(f"\nProcessing indicator: {code}")
+        raw = fetch_indicator(code)
+        print(f"  Fetched {len(raw)} raw records")
+        df = parse_records(raw, code, url)
+        all_dfs.append(df)
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+    print(f"\nTotal records to write: {len(combined)}")
+    write_to_bronze(combined, catalog)
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    run()
+
+```
+
+### nootbook.ipynb
+
+```json
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "e729795b",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Addition: 15\n",
+      "Subtraction: 5\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Addition\n",
+    "a = 10\n",
+    "b = 5\n",
+    "\n",
+    "add = a + b\n",
+    "print(\"Addition:\", add)\n",
+    "\n",
+    "# Subtraction\n",
+    "sub = a - b\n",
+    "print(\"Subtraction:\", sub)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": ".venv (3.13.5.final.0)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.13.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+
+```
+
+### notebooks/verify_week1.ipynb
+
+```json
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "c70e18c8",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Total rows: 123110\n",
+      "Columns: ['indicator_code', 'indicator_name', 'country_code', 'country_name', 'year', 'value', 'low', 'high', 'sex', '_ingested_at', '_source_url', '_ingestion_date']\n",
+      "  indicator_code indicator_name country_code country_name  year  value  low  \\\n",
+      "0       WHS4_100            NaN          BLR          BLR  2020   97.0  NaN   \n",
+      "1       WHS4_100            NaN          TON          TON  2016   96.0  NaN   \n",
+      "2       WHS4_100            NaN          GRC          GRC  2005   96.0  NaN   \n",
+      "3       WHS4_100            NaN          UKR          UKR  2000   99.0  NaN   \n",
+      "4       WHS4_100            NaN          ERI          ERI  2014   94.0  NaN   \n",
+      "\n",
+      "   high  sex                      _ingested_at  \\\n",
+      "0   NaN  NaN  2026-05-17T14:30:45.413862+00:00   \n",
+      "1   NaN  NaN  2026-05-17T14:30:45.413862+00:00   \n",
+      "2   NaN  NaN  2026-05-17T14:30:45.413862+00:00   \n",
+      "3   NaN  NaN  2026-05-17T14:30:45.413862+00:00   \n",
+      "4   NaN  NaN  2026-05-17T14:30:45.413862+00:00   \n",
+      "\n",
+      "                                 _source_url _ingestion_date  \n",
+      "0  https://ghoapi.azureedge.net/api/WHS4_100      2026-05-17  \n",
+      "1  https://ghoapi.azureedge.net/api/WHS4_100      2026-05-17  \n",
+      "2  https://ghoapi.azureedge.net/api/WHS4_100      2026-05-17  \n",
+      "3  https://ghoapi.azureedge.net/api/WHS4_100      2026-05-17  \n",
+      "4  https://ghoapi.azureedge.net/api/WHS4_100      2026-05-17  \n"
+     ]
+    }
+   ],
+   "source": [
+    "from pyiceberg.catalog import load_catalog\n",
+    "\n",
+    "catalog = load_catalog(\"default\", **{\n",
+    "    \"type\": \"rest\",\n",
+    "    \"uri\": \"http://localhost:8181\",\n",
+    "    \"s3.endpoint\": \"http://localhost:9000\",\n",
+    "    \"s3.access-key-id\": \"minioadmin\",\n",
+    "    \"s3.secret-access-key\": \"minioadmin\",\n",
+    "    \"s3.path-style-access\": \"true\",\n",
+    "    \"s3.region\": \"us-east-1\",\n",
+    "})\n",
+    "\n",
+    "tbl = catalog.load_table(\"bronze.who_gho_raw\")\n",
+    "\n",
+    "df = tbl.scan().to_pandas()\n",
+    "\n",
+    "print(f\"Total rows: {len(df)}\")\n",
+    "print(f\"Columns: {list(df.columns)}\")\n",
+    "\n",
+    "print(df.head())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "cd26eaa2",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Ingestion dates found: <ArrowStringArray>\n",
+      "['2026-05-17']\n",
+      "Length: 1, dtype: str\n",
+      "Indicators found: <ArrowStringArray>\n",
+      "['WHS4_100', 'MDG_0000000001', 'WHOSIS_000001']\n",
+      "Length: 3, dtype: str\n",
+      "Countries found: 250 unique\n"
+     ]
+    }
+   ],
+   "source": [
+    "assert \"_ingested_at\" in df.columns, \"Missing _ingested_at\"\n",
+    "assert \"_source_url\" in df.columns, \"Missing _source_url\"\n",
+    "assert \"_ingestion_date\" in df.columns, \"Missing _ingestion_date\"\n",
+    "\n",
+    "print(\"Ingestion dates found:\", df[\"_ingestion_date\"].unique())\n",
+    "print(\"Indicators found:\", df[\"indicator_code\"].unique())\n",
+    "print(\"Countries found:\", df[\"country_code\"].nunique(), \"unique\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "bd5957d5",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Number of snapshots: 2\n",
+      "snapshot_id=5829151060771756342 timestamp_ms=1779027130004\n",
+      "snapshot_id=275259005088287816 timestamp_ms=1779028287271\n"
+     ]
+    }
+   ],
+   "source": [
+    "import subprocess\n",
+    "subprocess.run([\"python\", \"ingestion/who_gho.py\"])\n",
+    "\n",
+    "tbl = catalog.load_table(\"bronze.who_gho_raw\")\n",
+    "snapshots = tbl.history()\n",
+    "print(f\"Number of snapshots: {len(snapshots)}\")\n",
+    "for snap in snapshots:\n",
+    "    print(snap)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "ad03a8b6",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Rows at snapshot 1: 61555\n",
+      "Rows at latest:     123110\n",
+      "Time-travel is working!\n"
+     ]
+    }
+   ],
+   "source": [
+    "first_snapshot_id = snapshots[0].snapshot_id\n",
+    "\n",
+    "df_v1 = tbl.scan(snapshot_id=first_snapshot_id).to_pandas()\n",
+    "df_latest = tbl.scan().to_pandas()\n",
+    "\n",
+    "print(f\"Rows at snapshot 1: {len(df_v1)}\")\n",
+    "print(f\"Rows at latest:     {len(df_latest)}\")\n",
+    "print(\"Time-travel is working!\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "fc923e38",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "  country  avg_tb_incidence_per_100k\n",
+      "0     BRN                       99.0\n",
+      "1     CUB                       99.0\n",
+      "2     HUN                       99.0\n",
+      "3     LUX                       99.0\n",
+      "4     MCO                       99.0\n",
+      "5     NIU                       99.0\n",
+      "6     OMN                       99.0\n",
+      "7     IRN                       98.7\n",
+      "8     PRT                       98.7\n",
+      "9     CHN                       98.5\n"
+     ]
+    }
+   ],
+   "source": [
+    "import pandas as pd\n",
+    "\n",
+    "tb_df = df[df[\"indicator_code\"] == \"WHS4_100\"].copy()\n",
+    "tb_df = tb_df[tb_df[\"year\"] >= 2015].dropna(subset=[\"value\"])\n",
+    "top10 = (\n",
+    "    tb_df.groupby(\"country_code\")[\"value\"]\n",
+    "    .mean()\n",
+    "    .nlargest(10)\n",
+    "    .reset_index()\n",
+    ")\n",
+    "top10.columns = [\"country\", \"avg_tb_incidence_per_100k\"]\n",
+    "print(top10)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": ".venv (3.13.5)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.13.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+
+```
+
+### notebooks/verify_week2.ipynb
+
+```json
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "673a430c",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Namespaces:\n",
+      "[('bronze',)]\n",
+      "\n",
+      "Bronze tables:\n",
+      "[('bronze', 'who_gho_raw')]\n",
+      "\n",
+      "Default tables:\n"
+     ]
+    },
+    {
+     "ename": "NoSuchNamespaceError",
+     "evalue": "NoSuchNamespaceException: Namespace does not exist: default",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[31m---------------------------------------------------------------------------\u001b[39m",
+      "\u001b[31mHTTPError\u001b[39m                                 Traceback (most recent call last)",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\pyiceberg\\catalog\\rest\\__init__.py:900\u001b[39m, in \u001b[36mRestCatalog.list_tables\u001b[39m\u001b[34m(self, namespace)\u001b[39m\n\u001b[32m    899\u001b[39m \u001b[38;5;28;01mtry\u001b[39;00m:\n\u001b[32m--> \u001b[39m\u001b[32m900\u001b[39m     \u001b[30;43mresponse\u001b[39;49m\u001b[30;43m.\u001b[39;49m\u001b[30;43mraise_for_status\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43m)\u001b[39;49m\n\u001b[32m    901\u001b[39m \u001b[38;5;28;01mexcept\u001b[39;00m HTTPError \u001b[38;5;28;01mas\u001b[39;00m exc:\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\requests\\models.py:1167\u001b[39m, in \u001b[36mResponse.raise_for_status\u001b[39m\u001b[34m(self)\u001b[39m\n\u001b[32m   1166\u001b[39m \u001b[38;5;28;01mif\u001b[39;00m http_error_msg:\n\u001b[32m-> \u001b[39m\u001b[32m1167\u001b[39m     \u001b[38;5;28;01mraise\u001b[39;00m HTTPError(http_error_msg, response=\u001b[38;5;28mself\u001b[39m)\n",
+      "\u001b[31mHTTPError\u001b[39m: 404 Client Error: Not Found for url: http://localhost:8181/v1/namespaces/default/tables",
+      "\nThe above exception was the direct cause of the following exception:\n",
+      "\u001b[31mNoSuchNamespaceError\u001b[39m                      Traceback (most recent call last)",
+      "\u001b[36mCell\u001b[39m\u001b[36m \u001b[39m\u001b[32mIn[6]\u001b[39m\u001b[32m, line 19\u001b[39m\n\u001b[32m     15\u001b[39m print(\u001b[33m\"\\nBronze tables:\"\u001b[39m)\n\u001b[32m     16\u001b[39m print(catalog.list_tables(\u001b[33m\"bronze\"\u001b[39m))\n\u001b[32m     17\u001b[39m \n\u001b[32m     18\u001b[39m print(\u001b[33m\"\\nDefault tables:\"\u001b[39m)\n\u001b[32m---> \u001b[39m\u001b[32m19\u001b[39m print(catalog.list_tables(\u001b[33m\"default\"\u001b[39m))\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\tenacity\\__init__.py:331\u001b[39m, in \u001b[36mBaseRetrying.wraps.<locals>.wrapped_f\u001b[39m\u001b[34m(*args, **kw)\u001b[39m\n\u001b[32m    329\u001b[39m copy = \u001b[38;5;28mself\u001b[39m.copy()\n\u001b[32m    330\u001b[39m wrapped_f.statistics = copy.statistics  \u001b[38;5;66;03m# type: ignore[attr-defined]\u001b[39;00m\n\u001b[32m--> \u001b[39m\u001b[32m331\u001b[39m \u001b[38;5;28;01mreturn\u001b[39;00m \u001b[30;43mcopy\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43mf\u001b[39;49m\u001b[30;43m,\u001b[39;49m\u001b[30;43m \u001b[39;49m\u001b[30;43m*\u001b[39;49m\u001b[30;43margs\u001b[39;49m\u001b[30;43m,\u001b[39;49m\u001b[30;43m \u001b[39;49m\u001b[30;43m*\u001b[39;49m\u001b[30;43m*\u001b[39;49m\u001b[30;43mkw\u001b[39;49m\u001b[30;43m)\u001b[39;49m\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\tenacity\\__init__.py:470\u001b[39m, in \u001b[36mRetrying.__call__\u001b[39m\u001b[34m(self, fn, *args, **kwargs)\u001b[39m\n\u001b[32m    468\u001b[39m retry_state = RetryCallState(retry_object=\u001b[38;5;28mself\u001b[39m, fn=fn, args=args, kwargs=kwargs)\n\u001b[32m    469\u001b[39m \u001b[38;5;28;01mwhile\u001b[39;00m \u001b[38;5;28;01mTrue\u001b[39;00m:\n\u001b[32m--> \u001b[39m\u001b[32m470\u001b[39m     do = \u001b[30;43mself\u001b[39;49m\u001b[30;43m.\u001b[39;49m\u001b[30;43miter\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43mretry_state\u001b[39;49m\u001b[30;43m=\u001b[39;49m\u001b[30;43mretry_state\u001b[39;49m\u001b[30;43m)\u001b[39;49m\n\u001b[32m    471\u001b[39m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28misinstance\u001b[39m(do, DoAttempt):\n\u001b[32m    472\u001b[39m         \u001b[38;5;28;01mtry\u001b[39;00m:\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\tenacity\\__init__.py:371\u001b[39m, in \u001b[36mBaseRetrying.iter\u001b[39m\u001b[34m(self, retry_state)\u001b[39m\n\u001b[32m    369\u001b[39m result = \u001b[38;5;28;01mNone\u001b[39;00m\n\u001b[32m    370\u001b[39m \u001b[38;5;28;01mfor\u001b[39;00m action \u001b[38;5;129;01min\u001b[39;00m \u001b[38;5;28mself\u001b[39m.iter_state.actions:\n\u001b[32m--> \u001b[39m\u001b[32m371\u001b[39m     result = \u001b[30;43maction\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43mretry_state\u001b[39;49m\u001b[30;43m)\u001b[39;49m\n\u001b[32m    372\u001b[39m \u001b[38;5;28;01mreturn\u001b[39;00m result\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\tenacity\\__init__.py:393\u001b[39m, in \u001b[36mBaseRetrying._post_retry_check_actions.<locals>.<lambda>\u001b[39m\u001b[34m(rs)\u001b[39m\n\u001b[32m    391\u001b[39m \u001b[38;5;28;01mdef\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[34m_post_retry_check_actions\u001b[39m(\u001b[38;5;28mself\u001b[39m, retry_state: \u001b[33m\"\u001b[39m\u001b[33mRetryCallState\u001b[39m\u001b[33m\"\u001b[39m) -> \u001b[38;5;28;01mNone\u001b[39;00m:\n\u001b[32m    392\u001b[39m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m (\u001b[38;5;28mself\u001b[39m.iter_state.is_explicit_retry \u001b[38;5;129;01mor\u001b[39;00m \u001b[38;5;28mself\u001b[39m.iter_state.retry_run_result):\n\u001b[32m--> \u001b[39m\u001b[32m393\u001b[39m         \u001b[38;5;28mself\u001b[39m._add_action_func(\u001b[38;5;28;01mlambda\u001b[39;00m rs: \u001b[30;43mrs\u001b[39;49m\u001b[30;43m.\u001b[39;49m\u001b[30;43moutcome\u001b[39;49m\u001b[30;43m.\u001b[39;49m\u001b[30;43mresult\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43m)\u001b[39;49m)\n\u001b[32m    394\u001b[39m         \u001b[38;5;28;01mreturn\u001b[39;00m\n\u001b[32m    396\u001b[39m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mself\u001b[39m.after \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m:\n",
+      "\u001b[36mFile \u001b[39m\u001b[32m~\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\concurrent\\futures\\_base.py:449\u001b[39m, in \u001b[36mFuture.result\u001b[39m\u001b[34m(self, timeout)\u001b[39m\n\u001b[32m    447\u001b[39m     \u001b[38;5;28;01mraise\u001b[39;00m CancelledError()\n\u001b[32m    448\u001b[39m \u001b[38;5;28;01melif\u001b[39;00m \u001b[38;5;28mself\u001b[39m._state == FINISHED:\n\u001b[32m--> \u001b[39m\u001b[32m449\u001b[39m     \u001b[38;5;28;01mreturn\u001b[39;00m \u001b[30;43mself\u001b[39;49m\u001b[30;43m.\u001b[39;49m\u001b[30;43m__get_result\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43m)\u001b[39;49m\n\u001b[32m    451\u001b[39m \u001b[38;5;28mself\u001b[39m._condition.wait(timeout)\n\u001b[32m    453\u001b[39m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mself\u001b[39m._state \u001b[38;5;129;01min\u001b[39;00m [CANCELLED, CANCELLED_AND_NOTIFIED]:\n",
+      "\u001b[36mFile \u001b[39m\u001b[32m~\\AppData\\Local\\Programs\\Python\\Python313\\Lib\\concurrent\\futures\\_base.py:401\u001b[39m, in \u001b[36mFuture.__get_result\u001b[39m\u001b[34m(self)\u001b[39m\n\u001b[32m    399\u001b[39m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mself\u001b[39m._exception \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m:\n\u001b[32m    400\u001b[39m     \u001b[38;5;28;01mtry\u001b[39;00m:\n\u001b[32m--> \u001b[39m\u001b[32m401\u001b[39m         \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;28mself\u001b[39m._exception\n\u001b[32m    402\u001b[39m     \u001b[38;5;28;01mfinally\u001b[39;00m:\n\u001b[32m    403\u001b[39m         \u001b[38;5;66;03m# Break a reference cycle with the exception in self._exception\u001b[39;00m\n\u001b[32m    404\u001b[39m         \u001b[38;5;28mself\u001b[39m = \u001b[38;5;28;01mNone\u001b[39;00m\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\tenacity\\__init__.py:473\u001b[39m, in \u001b[36mRetrying.__call__\u001b[39m\u001b[34m(self, fn, *args, **kwargs)\u001b[39m\n\u001b[32m    471\u001b[39m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28misinstance\u001b[39m(do, DoAttempt):\n\u001b[32m    472\u001b[39m     \u001b[38;5;28;01mtry\u001b[39;00m:\n\u001b[32m--> \u001b[39m\u001b[32m473\u001b[39m         result = \u001b[30;43mfn\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43m*\u001b[39;49m\u001b[30;43margs\u001b[39;49m\u001b[30;43m,\u001b[39;49m\u001b[30;43m \u001b[39;49m\u001b[30;43m*\u001b[39;49m\u001b[30;43m*\u001b[39;49m\u001b[30;43mkwargs\u001b[39;49m\u001b[30;43m)\u001b[39;49m\n\u001b[32m    474\u001b[39m     \u001b[38;5;28;01mexcept\u001b[39;00m \u001b[38;5;167;01mBaseException\u001b[39;00m:  \u001b[38;5;66;03m# noqa: B902\u001b[39;00m\n\u001b[32m    475\u001b[39m         retry_state.set_exception(sys.exc_info())  \u001b[38;5;66;03m# type: ignore[arg-type]\u001b[39;00m\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\pyiceberg\\catalog\\rest\\__init__.py:902\u001b[39m, in \u001b[36mRestCatalog.list_tables\u001b[39m\u001b[34m(self, namespace)\u001b[39m\n\u001b[32m    900\u001b[39m     response.raise_for_status()\n\u001b[32m    901\u001b[39m \u001b[38;5;28;01mexcept\u001b[39;00m HTTPError \u001b[38;5;28;01mas\u001b[39;00m exc:\n\u001b[32m--> \u001b[39m\u001b[32m902\u001b[39m     \u001b[30;43m_handle_non_200_response\u001b[39;49m\u001b[30;43m(\u001b[39;49m\u001b[30;43mexc\u001b[39;49m\u001b[30;43m,\u001b[39;49m\u001b[30;43m \u001b[39;49m\u001b[30;43m{\u001b[39;49m\u001b[30;43m404\u001b[39;49m\u001b[30;43m:\u001b[39;49m\u001b[30;43m \u001b[39;49m\u001b[30;43mNoSuchNamespaceError\u001b[39;49m\u001b[30;43m}\u001b[39;49m\u001b[30;43m)\u001b[39;49m\n\u001b[32m    903\u001b[39m \u001b[38;5;28;01mreturn\u001b[39;00m [(*table.namespace, table.name) \u001b[38;5;28;01mfor\u001b[39;00m table \u001b[38;5;129;01min\u001b[39;00m ListTablesResponse.model_validate_json(response.text).identifiers]\n",
+      "\u001b[36mFile \u001b[39m\u001b[32mc:\\Users\\hamed\\Documents\\health-lakehouse\\.venv\\Lib\\site-packages\\pyiceberg\\catalog\\rest\\response.py:111\u001b[39m, in \u001b[36m_handle_non_200_response\u001b[39m\u001b[34m(exc, error_handler)\u001b[39m\n\u001b[32m    108\u001b[39m     errs = \u001b[33m\"\u001b[39m\u001b[33m, \u001b[39m\u001b[33m\"\u001b[39m.join(err[\u001b[33m\"\u001b[39m\u001b[33mmsg\u001b[39m\u001b[33m\"\u001b[39m] \u001b[38;5;28;01mfor\u001b[39;00m err \u001b[38;5;129;01min\u001b[39;00m e.errors())\n\u001b[32m    109\u001b[39m     response = \u001b[33mf\u001b[39m\u001b[33m\"\u001b[39m\u001b[33mRESTError \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mexc.response.status_code\u001b[38;5;132;01m}\u001b[39;00m\u001b[33m: Received unexpected JSON Payload: \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mexc.response.text\u001b[38;5;132;01m}\u001b[39;00m\u001b[33m, errors: \u001b[39m\u001b[38;5;132;01m{\u001b[39;00merrs\u001b[38;5;132;01m}\u001b[39;00m\u001b[33m\"\u001b[39m\n\u001b[32m--> \u001b[39m\u001b[32m111\u001b[39m \u001b[38;5;28;01mraise\u001b[39;00m exception(response) \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[34;01mexc\u001b[39;00m\n",
+      "\u001b[31mNoSuchNamespaceError\u001b[39m: NoSuchNamespaceException: Namespace does not exist: default"
+     ]
+    }
+   ],
+   "source": [
+    "from pyiceberg.catalog import load_catalog\n",
+    "\n",
+    "catalog = load_catalog(\"default\", **{\n",
+    "    \"type\": \"rest\",\n",
+    "    \"uri\": \"http://localhost:8181\",\n",
+    "    \"s3.endpoint\": \"http://localhost:9000\",\n",
+    "    \"s3.access-key-id\": \"minioadmin\",\n",
+    "    \"s3.secret-access-key\": \"minioadmin\",\n",
+    "    \"s3.path-style-access\": \"true\",\n",
+    "})\n",
+    "\n",
+    "print(\"Namespaces:\")\n",
+    "print(catalog.list_namespaces())\n",
+    "\n",
+    "print(\"\\nBronze tables:\")\n",
+    "print(catalog.list_tables(\"bronze\"))\n",
+    "\n",
+    "print(\"\\nDefault tables:\")\n",
+    "print(catalog.list_tables(\"default\"))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "57eebb3c",
+   "metadata": {},
+   "source": [
+    "Cell 1 â€” check all tables exist with row counts"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "38c23fe4",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "bronze.who_gho_raw: 61,555 rows\n",
+      "MISSING: bronze.cdc_nndss_raw\n",
+      "MISSING: bronze.owid_covid_raw\n",
+      "MISSING: bronze.owid_vaccination_raw\n",
+      "MISSING: bronze.fred_macro_raw\n",
+      "MISSING: bronze.fda_adverse_events_raw\n"
+     ]
+    }
+   ],
+   "source": [
+    "from pyiceberg.catalog import load_catalog\n",
+    "\n",
+    "catalog = load_catalog(\"default\", **{\n",
+    "    \"type\": \"rest\",\n",
+    "    \"uri\": \"http://localhost:8181\",\n",
+    "    \"s3.endpoint\": \"http://localhost:9000\",\n",
+    "    \"s3.access-key-id\": \"minioadmin\",\n",
+    "    \"s3.secret-access-key\": \"minioadmin\",\n",
+    "    \"s3.path-style-access\": \"true\",\n",
+    "})\n",
+    "\n",
+    "tables = [\n",
+    "    \"bronze.who_gho_raw\",\n",
+    "    \"bronze.cdc_nndss_raw\",\n",
+    "    \"bronze.owid_covid_raw\",\n",
+    "    \"bronze.owid_vaccination_raw\",\n",
+    "    \"bronze.fred_macro_raw\",\n",
+    "    \"bronze.fda_adverse_events_raw\",\n",
+    "]\n",
+    "\n",
+    "for t in tables:\n",
+    "\n",
+    "    namespace, table = t.split(\".\", 1)\n",
+    "\n",
+    "    identifier = (namespace, table)\n",
+    "\n",
+    "    exists = catalog.table_exists(identifier)\n",
+    "\n",
+    "    if exists:\n",
+    "        rows = catalog.load_table(identifier).scan().to_arrow().num_rows\n",
+    "\n",
+    "        print(f\"{t}: {rows:,} rows\")\n",
+    "\n",
+    "    else:\n",
+    "        print(f\"MISSING: {t}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "3a6641d3",
+   "metadata": {},
+   "source": [
+    "Cell 2 â€” confirm lineage columns on every table"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "b2aa4ae2",
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "NameError",
+     "evalue": "name 'tables' is not defined",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[31m---------------------------------------------------------------------------\u001b[39m",
+      "\u001b[31mNameError\u001b[39m                                 Traceback (most recent call last)",
+      "\u001b[36mCell\u001b[39m\u001b[36m \u001b[39m\u001b[32mIn[3]\u001b[39m\u001b[32m, line 1\u001b[39m\n\u001b[32m----> \u001b[39m\u001b[32m1\u001b[39m \u001b[38;5;28;01mfor\u001b[39;00m t \u001b[38;5;28;01min\u001b[39;00m tables:\n\u001b[32m      2\u001b[39m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28;01mnot\u001b[39;00m catalog.table_exists(t):\n\u001b[32m      3\u001b[39m         \u001b[38;5;28;01mcontinue\u001b[39;00m\n\u001b[32m      4\u001b[39m     df = catalog.load_table(t).scan(limit=\u001b[32m1\u001b[39m).to_pandas()\n",
+      "\u001b[31mNameError\u001b[39m: name 'tables' is not defined"
+     ]
+    }
+   ],
+   "source": [
+    "for t in tables:\n",
+    "    if not catalog.table_exists(t):\n",
+    "        continue\n",
+    "    df = catalog.load_table(t).scan(limit=1).to_pandas()\n",
+    "    has_ingested_at = \"_ingested_at\" in df.columns\n",
+    "    has_source_url  = \"_source_url\" in df.columns\n",
+    "    has_date        = \"_ingestion_date\" in df.columns\n",
+    "    status = \"OK\" if all([has_ingested_at, has_source_url, has_date]) else \"MISSING COLUMNS\"\n",
+    "    print(f\"  {t}: {status}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "dee9b882",
+   "metadata": {},
+   "source": [
+    "Cell 3 â€” confirm Prefect flow run history"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "383395bb",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[FlowRun(id=UUID('89b730f7-9027-4cdd-9a1d-674c483e1b13'), name='purple-tody', flow_id=UUID('671cb84d-70db-4725-8e00-bf28b397df39'), state_id=UUID('019e4643-1e0b-7d04-a77a-33503220a94e'), deployment_id=None, deployment_version=None, work_queue_name=None, flow_version='97fb58362cceb396bb700c413f6646fc', parameters={}, idempotency_key=None, context={}, empirical_policy=FlowRunPolicy(max_retries=0, retry_delay_seconds=0.0, retries=0, retry_delay=0, pause_keys=set(), resuming=False, retry_type=None), tags=[], labels={'prefect.flow.id': '671cb84d-70db-4725-8e00-bf28b397df39'}, parent_task_run_id=None, run_count=1, expected_start_time=datetime.datetime(2026, 5, 20, 16, 35, 16, 514278, tzinfo=TzInfo(0)), next_scheduled_start_time=None, start_time=datetime.datetime(2026, 5, 20, 16, 35, 16, 641292, tzinfo=TzInfo(0)), end_time=datetime.datetime(2026, 5, 20, 16, 41, 4, 267931, tzinfo=TzInfo(0)), total_run_time=datetime.timedelta(seconds=347, microseconds=626639), estimated_run_time=datetime.timedelta(seconds=347, microseconds=626639), estimated_start_time_delta=datetime.timedelta(microseconds=127014), auto_scheduled=False, infrastructure_document_id=None, infrastructure_pid=None, created_by=None, work_queue_id=None, work_pool_id=None, work_pool_name=None, state=Crashed(message='Execution was aborted by an interrupt signal.', type=CRASHED, result=None), job_variables={}, state_type=StateType.CRASHED, state_name='Crashed'), FlowRun(id=UUID('7d61a304-4ae3-45ee-b128-92a2b9af42ad'), name='khaki-asp', flow_id=UUID('671cb84d-70db-4725-8e00-bf28b397df39'), state_id=UUID('019e45fc-d9b6-7c5e-81dd-692082c8166d'), deployment_id=None, deployment_version=None, work_queue_name=None, flow_version='ca720acba50ae2b8035103cc115b72bb', parameters={}, idempotency_key=None, context={}, empirical_policy=FlowRunPolicy(max_retries=0, retry_delay_seconds=0.0, retries=0, retry_delay=0, pause_keys=set(), resuming=False, retry_type=None), tags=[], labels={'prefect.flow.id': '671cb84d-70db-4725-8e00-bf28b397df39'}, parent_task_run_id=None, run_count=1, expected_start_time=datetime.datetime(2026, 5, 20, 15, 18, 12, 495950, tzinfo=TzInfo(0)), next_scheduled_start_time=None, start_time=datetime.datetime(2026, 5, 20, 15, 18, 12, 626374, tzinfo=TzInfo(0)), end_time=datetime.datetime(2026, 5, 20, 15, 24, 19, 254218, tzinfo=TzInfo(0)), total_run_time=datetime.timedelta(seconds=366, microseconds=627844), estimated_run_time=datetime.timedelta(seconds=366, microseconds=627844), estimated_start_time_delta=datetime.timedelta(microseconds=130424), auto_scheduled=False, infrastructure_document_id=None, infrastructure_pid=None, created_by=None, work_queue_id=None, work_pool_id=None, work_pool_name=None, state=Failed(message=\"Flow run encountered an exception: TypeError: run() got an unexpected keyword argument 'cache_path'\", type=FAILED, result=None), job_variables={}, state_type=StateType.FAILED, state_name='Failed')]\n"
+     ]
+    }
+   ],
+   "source": [
+    "from prefect.client.orchestration import get_client\n",
+    "\n",
+    "with get_client(sync_client=True) as client:\n",
+    "    flows = client.read_flow_runs(limit=5)\n",
+    "\n",
+    "print(flows)"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": ".venv (3.13.5.final.0)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.13.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+
+```
+
+### README.md
+
+```markdown
+hello this is readmeV1
+we document here 
+code there problem exists we solve it
+
+```
+
+### requirements.txt
+
+```text
+annotated-types==0.7.0
+anyio==4.13.0
+argon2-cffi==25.1.0
+argon2-cffi-bindings==25.1.0
+arrow==1.4.0
+asttokens==3.0.1
+async-lru==2.3.0
+attrs==26.1.0
+babel==2.18.0
+beautifulsoup4==4.14.3
+bleach==6.3.0
+boto3==1.43.9
+botocore==1.43.9
+cachetools==6.2.6
+certifi==2026.4.22
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.4.0
+colorama==0.4.6
+comm==0.2.3
+debugpy==1.8.20
+decorator==5.3.0
+defusedxml==0.7.1
+executing==2.2.1
+fastjsonschema==2.21.2
+fqdn==1.5.1
+fsspec==2026.4.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.15
+ipykernel==7.2.0
+ipython==9.13.0
+ipython_pygments_lexers==1.1.1
+ipywidgets==8.1.8
+isoduration==20.11.0
+jedi==0.20.0
+Jinja2==3.1.6
+jmespath==1.1.0
+json5==0.14.0
+jsonpointer==3.1.1
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+jupyter==1.1.1
+jupyter-console==6.6.3
+jupyter-events==0.12.1
+jupyter-lsp==2.3.1
+jupyter_client==8.8.0
+jupyter_core==5.9.1
+jupyter_server==2.18.2
+jupyter_server_terminals==0.5.4
+jupyterlab==4.5.7
+jupyterlab_pygments==0.3.0
+jupyterlab_server==2.28.0
+jupyterlab_widgets==3.0.16
+lark==1.3.1
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+matplotlib-inline==0.2.2
+mdurl==0.1.2
+mistune==3.2.1
+mmh3==5.2.1
+nbclient==0.10.4
+nbconvert==7.17.1
+nbformat==5.10.4
+nest-asyncio==1.6.0
+notebook==7.5.6
+notebook_shim==0.2.4
+numpy==2.4.5
+packaging==26.2
+pandas==3.0.3
+pandocfilters==1.5.1
+parso==0.8.7
+perfect==0.0.1
+platformdirs==4.9.6
+prometheus_client==0.25.0
+prompt_toolkit==3.0.52
+psutil==7.2.2
+pure_eval==0.2.3
+pyarrow==24.0.0
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.20.0
+pyiceberg==0.11.1
+pyiceberg-core==0.7.0
+pyparsing==3.3.2
+pyroaring==1.1.0
+python-dateutil==2.9.0.post0
+python-json-logger==4.1.0
+pywinpty==3.0.3
+PyYAML==6.0.3
+pyzmq==27.1.0
+referencing==0.37.0
+requests==2.34.2
+rfc3339-validator==0.1.4
+rfc3986-validator==0.1.1
+rfc3987-syntax==1.1.0
+rich==14.3.4
+rpds-py==0.30.0
+s3transfer==0.17.0
+Send2Trash==2.1.0
+setuptools==82.0.1
+six==1.17.0
+soupsieve==2.8.3
+stack-data==0.6.3
+strictyaml==1.7.3
+tenacity==9.1.4
+terminado==0.18.1
+tinycss2==1.4.0
+tornado==6.5.5
+traitlets==5.15.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2026.2
+uri-template==1.3.0
+urllib3==2.7.0
+wcwidth==0.7.0
+webcolors==25.10.0
+webencodings==0.5.1
+websocket-client==1.9.0
+widgetsnbextension==4.0.15
+zstandard==0.25.0
+
+```
+
+### silver_transform/bronze_to_silver.py
+
+```python
+from who_silver  import transform_who_to_silver
+from cdc_silver  import transform_cdc_to_silver
+from owid_silver import transform_owid_to_silver
+from fred_silver import transform_fred_to_silver
+from fda_silver  import transform_fda_to_silver
+from scd2        import build_scd2_table
+
+def run_all_silver_transforms():
+    print("\n=== WHO GHO ===")
+    transform_who_to_silver()
+
+    print("\n=== CDC NNDSS ===")
+    transform_cdc_to_silver()
+
+    print("\n=== OWID ===")
+    transform_owid_to_silver()
+
+    print("\n=== FRED (3 series) ===")
+    transform_fred_to_silver()
+
+    print("\n=== OpenFDA ===")
+    transform_fda_to_silver()
+
+    print("\n=== SCD2 (WHO) ===")
+    build_scd2_table(
+        source_table="iceberg.silver.who_gho_silver",
+        target_table="iceberg.silver.who_gho_scd2",
+        key_cols=["indicator_code", "country_code", "sex"],
+        value_cols=["value", "low", "high"],
+    )
+
+    print("\nAll silver transforms complete.")
+
+if __name__ == "__main__":
+    run_all_silver_transforms()
+```
+
+### silver_transform/cdc_silver.py
+
+```python
+from spark_session import get_spark
+from pyspark.sql import functions as F
+from pyspark.sql.types import IntegerType, DoubleType
+from pyspark.sql.window import Window
+from datetime import datetime, timezone
+
+
+def transform_cdc_to_silver():
+    spark = get_spark("cdc-bronze-to-silver")
+    print("Reading bronze.cdc_nndss_raw...")
+
+    bronze = spark.sql("SELECT * FROM iceberg.bronze.cdc_nndss_raw")
+    print(f"Bronze row count: {bronze.count()}")
+
+    window_dedup = Window.partitionBy(
+        "condition", "reporting_area", "year", "week"
+    ).orderBy(F.col("_ingested_at").desc())
+
+    window_rolling = (
+        Window.partitionBy("condition", "reporting_area")
+        .orderBy("year", "week")
+        .rowsBetween(-4, -1)
+    )
+
+    silver = (
+        bronze.withColumn("year", F.col("year").cast(IntegerType()))
+        .withColumn("week", F.col("week").cast(IntegerType()))
+        .withColumn("current_week", F.col("current_week").cast(DoubleType()))
+        .withColumn(
+            "cumulative_ytd_current_year",
+            F.col("cumulative_ytd_current_year").cast(DoubleType()),
+        )
+        .withColumn(
+            "cumulative_ytd_previous_year",
+            F.col("cumulative_ytd_previous_year").cast(DoubleType()),
+        )
+        .withColumn("reporting_area", F.upper(F.trim(F.col("reporting_area"))))
+        .withColumn("condition", F.upper(F.trim(F.col("condition"))))
+        .filter(F.col("condition").isNotNull())
+        .filter(F.col("reporting_area").isNotNull())
+        .filter(F.col("year").isNotNull())
+        .withColumn(
+            "current_week",
+            F.when(F.col("current_week") < 0, None).otherwise(F.col("current_week")),
+        )
+        .withColumn("_row_num", F.row_number().over(window_dedup))
+        .filter(F.col("_row_num") == 1)
+        .drop("_row_num")
+        .withColumn("rolling_avg_cases", F.avg("current_week").over(window_rolling))
+        .withColumn(
+            "is_outbreak",
+            F.when(
+                F.col("current_week") > 3 * F.col("rolling_avg_cases"), True
+            ).otherwise(False),
+        )
+        .withColumn(
+            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
+        )
+        .withColumn("_silver_version", F.lit(1))
+    )
+
+    print(f"Silver row count after cleaning: {silver.count()}")
+
+    silver.writeTo("iceberg.silver.cdc_nndss_silver").tableProperty(
+        "write.format.default", "parquet"
+    ).createOrReplace()
+
+    print("Written to iceberg.silver.cdc_nndss_silver")
+    spark.stop()
+
+
+if __name__ == "__main__":
+    transform_cdc_to_silver()
+
+```
+
+### silver_transform/fda_silver.py
+
+```python
+from spark_session import get_spark
+from pyspark.sql import functions as F
+from pyspark.sql.types import IntegerType
+from pyspark.sql.window import Window
+from datetime import datetime, timezone
+
+
+def transform_fda_to_silver():
+    spark = get_spark("fda-bronze-to-silver")
+    print("Reading bronze.openfda_drug_event_raw...")
+
+    bronze = spark.sql("SELECT * FROM iceberg.bronze.openfda_drug_event_raw")
+
+    print(f"Bronze row count: {bronze.count()}")
+
+    extracted = (
+        bronze.withColumn(
+            "report_id", F.get_json_object("record_json", "$.safetyreportid")
+        )
+        .withColumn(
+            "drug_name",
+            F.upper(
+                F.trim(
+                    F.get_json_object(
+                        "record_json", "$.patient.drug[0].medicinalproduct"
+                    )
+                )
+            ),
+        )
+        .withColumn(
+            "serious", F.get_json_object("record_json", "$.serious").cast(IntegerType())
+        )
+        .withColumn(
+            "receive_date",
+            F.to_date(F.get_json_object("record_json", "$.receivedate"), "yyyyMMdd"),
+        )
+        .withColumn(
+            "patient_age",
+            F.get_json_object("record_json", "$.patient.patientonsetage").cast(
+                IntegerType()
+            ),
+        )
+        .withColumn(
+            "patient_sex", F.get_json_object("record_json", "$.patient.patientsex")
+        )
+    )
+
+    window_dedup = Window.partitionBy("report_id", "drug_name").orderBy(
+        F.col("_ingested_at").desc()
+    )
+
+    silver = (
+        extracted.filter(F.col("report_id").isNotNull())
+        .filter(F.col("drug_name").isNotNull())
+        .withColumn(
+            "patient_age",
+            F.when(
+                (F.col("patient_age") < 0) | (F.col("patient_age") > 120), None
+            ).otherwise(F.col("patient_age")),
+        )
+        .withColumn(
+            "patient_sex",
+            F.when(F.col("patient_sex") == "1", "male")
+            .when(F.col("patient_sex") == "2", "female")
+            .otherwise("unknown"),
+        )
+        .withColumn("is_serious", F.when(F.col("serious") == 1, True).otherwise(False))
+        .withColumn(
+            "serious_label",
+            F.when(F.col("serious") == 1, "serious").otherwise("non-serious"),
+        )
+        .withColumn("_row_num", F.row_number().over(window_dedup))
+        .filter(F.col("_row_num") == 1)
+        .drop("_row_num")
+        .withColumn(
+            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
+        )
+        .withColumn("_silver_version", F.lit(1))
+    )
+
+    print(f"Silver row count after cleaning: {silver.count()}")
+
+    silver.writeTo("iceberg.silver.openfda_drug_event_silver").tableProperty(
+        "write.format.default", "parquet"
+    ).createOrReplace()
+
+    print("Written to iceberg.silver.openfda_drug_event_silver")
+
+    spark.stop()
+
+
+if __name__ == "__main__":
+    transform_fda_to_silver()
+
+```
+
+### silver_transform/fred_silver.py
+
+```python
+from spark_session import get_spark
+from pyspark.sql import functions as F
+from pyspark.sql.types import DoubleType
+from datetime import datetime, timezone
+
+FRED_TABLES = {
+    "bronze.fred_unrate_raw": "silver.fred_unrate_silver",
+    "bronze.fred_cpiaucsl_raw": "silver.fred_cpiaucsl_silver",
+    "bronze.fred_dgs10_raw": "silver.fred_dgs10_silver",
+}
+
+
+def transform_single_fred(spark, bronze_table: str, silver_table: str):
+    print(f"Reading {bronze_table}...")
+
+    bronze = spark.sql(f"SELECT * FROM iceberg.{bronze_table}")
+    print(f"  Bronze row count: {bronze.count()}")
+
+    silver = (
+        bronze.withColumn("series_id", F.get_json_object("record_json", "$.series_id"))
+        .withColumn(
+            "date",
+            F.to_date(
+                F.get_json_object("record_json", "$.observation_date"), "yyyy-MM-dd"
+            ),
+        )
+        .withColumn(
+            "value", F.get_json_object("record_json", "$.value").cast(DoubleType())
+        )
+        .filter(F.col("series_id").isNotNull())
+        .filter(F.col("date").isNotNull())
+        .filter(F.col("value").isNotNull())
+        .dropDuplicates(["series_id", "date"])
+        .withColumn(
+            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
+        )
+        .withColumn("_silver_version", F.lit(1))
+    )
+
+    print(f"  Silver row count: {silver.count()}")
+
+    silver.writeTo(f"iceberg.{silver_table}").tableProperty(
+        "write.format.default", "parquet"
+    ).createOrReplace()
+
+    print(f"  Written to iceberg.{silver_table}")
+
+
+def transform_fred_to_silver():
+    spark = get_spark("fred-bronze-to-silver")
+
+    for bronze_table, silver_table in FRED_TABLES.items():
+        transform_single_fred(spark, bronze_table, silver_table)
+
+    spark.stop()
+    print("All FRED silver tables done.")
+
+
+if __name__ == "__main__":
+    transform_fred_to_silver()
+
+```
+
+### silver_transform/owid_silver.py
+
+```python
+from spark_session import get_spark
+from pyspark.sql import functions as F
+from pyspark.sql.functions import get_json_object
+from pyspark.sql.types import DoubleType
+from pyspark.sql.window import Window
+from datetime import datetime, timezone
+
+CONTINENT_NAMES = [
+    "World",
+    "Africa",
+    "Asia",
+    "Europe",
+    "North America",
+    "South America",
+    "Oceania",
+    "High income",
+    "Low income",
+    "Upper middle income",
+    "Lower middle income",
+    "European Union",
+]
+
+
+def transform_owid_to_silver():
+    spark = get_spark("owid-bronze-to-silver")
+
+    # ==========================================================
+    # COVID DATASET
+    # ==========================================================
+
+    print("Reading bronze.owid_covid_raw...")
+
+    covid_bronze = spark.sql("SELECT * FROM iceberg.bronze.owid_covid_raw")
+
+    print(f"COVID bronze row count: {covid_bronze.count()}")
+
+    covid = (
+        covid_bronze.withColumn(
+            "iso_code", get_json_object("record_json", "$.iso_code")
+        )
+        .withColumn("location", get_json_object("record_json", "$.location"))
+        .withColumn("continent", get_json_object("record_json", "$.continent"))
+        .withColumn("date", get_json_object("record_json", "$.date"))
+        .withColumn("new_cases", get_json_object("record_json", "$.new_cases"))
+        .withColumn("total_cases", get_json_object("record_json", "$.total_cases"))
+        .withColumn("new_deaths", get_json_object("record_json", "$.new_deaths"))
+        .withColumn("total_deaths", get_json_object("record_json", "$.total_deaths"))
+        .withColumn(
+            "new_vaccinations", get_json_object("record_json", "$.new_vaccinations")
+        )
+        .withColumn(
+            "total_vaccinations", get_json_object("record_json", "$.total_vaccinations")
+        )
+        .withColumn(
+            "people_vaccinated", get_json_object("record_json", "$.people_vaccinated")
+        )
+        .withColumn(
+            "people_fully_vaccinated",
+            get_json_object("record_json", "$.people_fully_vaccinated"),
+        )
+        .withColumn(
+            "reproduction_rate", get_json_object("record_json", "$.reproduction_rate")
+        )
+        .withColumn("icu_patients", get_json_object("record_json", "$.icu_patients"))
+        .withColumn("hosp_patients", get_json_object("record_json", "$.hosp_patients"))
+    )
+
+    numeric_cols = [
+        "new_cases",
+        "total_cases",
+        "new_deaths",
+        "total_deaths",
+        "new_vaccinations",
+        "total_vaccinations",
+        "people_vaccinated",
+        "people_fully_vaccinated",
+        "reproduction_rate",
+        "icu_patients",
+        "hosp_patients",
+    ]
+
+    for col_name in numeric_cols:
+        covid = covid.withColumn(col_name, F.col(col_name).cast(DoubleType()))
+
+    window_dedup = Window.partitionBy("iso_code", "date").orderBy(
+        F.col("_ingested_at").desc()
+    )
+
+    window_rolling = Window.partitionBy("iso_code").orderBy("date").rowsBetween(-6, 0)
+
+    covid_silver = (
+        covid.withColumn("date", F.to_date("date"))
+        .filter(F.col("iso_code").isNotNull())
+        .filter(F.col("date").isNotNull())
+        .filter(~F.col("location").isin(CONTINENT_NAMES))
+        .withColumn(
+            "new_cases",
+            F.when(F.col("new_cases") < 0, None).otherwise(F.col("new_cases")),
+        )
+        .withColumn(
+            "new_deaths",
+            F.when(F.col("new_deaths") < 0, None).otherwise(F.col("new_deaths")),
+        )
+        .withColumn("_row_num", F.row_number().over(window_dedup))
+        .filter(F.col("_row_num") == 1)
+        .drop("_row_num")
+        .withColumn("rolling_7d_avg_cases", F.avg("new_cases").over(window_rolling))
+        .withColumn(
+            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
+        )
+        .withColumn("_silver_version", F.lit(1))
+    )
+
+    print(f"COVID silver row count: {covid_silver.count()}")
+
+    covid_silver.writeTo("iceberg.silver.owid_covid_silver").tableProperty(
+        "write.format.default", "parquet"
+    ).createOrReplace()
+
+    print("Written to iceberg.silver.owid_covid_silver")
+
+    # ==========================================================
+    # VACCINATION DATASET
+    # ==========================================================
+
+    print("Reading bronze.owid_vaccination_raw...")
+
+    vax_bronze = spark.sql("SELECT * FROM iceberg.bronze.owid_vaccination_raw")
+
+    vax = (
+        vax_bronze.withColumn("iso_code", get_json_object("record_json", "$.iso_code"))
+        .withColumn("location", get_json_object("record_json", "$.location"))
+        .withColumn("date", get_json_object("record_json", "$.date"))
+        .withColumn(
+            "total_vaccinations", get_json_object("record_json", "$.total_vaccinations")
+        )
+        .withColumn(
+            "people_vaccinated", get_json_object("record_json", "$.people_vaccinated")
+        )
+        .withColumn(
+            "people_fully_vaccinated",
+            get_json_object("record_json", "$.people_fully_vaccinated"),
+        )
+        .withColumn(
+            "daily_vaccinations", get_json_object("record_json", "$.daily_vaccinations")
+        )
+        .withColumn(
+            "total_vaccinations_per_hundred",
+            get_json_object("record_json", "$.total_vaccinations_per_hundred"),
+        )
+        .withColumn(
+            "people_vaccinated_per_hundred",
+            get_json_object("record_json", "$.people_vaccinated_per_hundred"),
+        )
+        .withColumn(
+            "people_fully_vaccinated_per_hundred",
+            get_json_object("record_json", "$.people_fully_vaccinated_per_hundred"),
+        )
+    )
+
+    vax_numeric = [
+        "total_vaccinations",
+        "people_vaccinated",
+        "people_fully_vaccinated",
+        "daily_vaccinations",
+        "total_vaccinations_per_hundred",
+        "people_vaccinated_per_hundred",
+        "people_fully_vaccinated_per_hundred",
+    ]
+
+    for col_name in vax_numeric:
+        vax = vax.withColumn(col_name, F.col(col_name).cast(DoubleType()))
+
+    window_dedup_vax = Window.partitionBy("iso_code", "date").orderBy(
+        F.col("_ingested_at").desc()
+    )
+
+    vax_silver = (
+        vax.withColumn("date", F.to_date("date"))
+        .filter(F.col("iso_code").isNotNull())
+        .filter(F.col("date").isNotNull())
+        .withColumn("_row_num", F.row_number().over(window_dedup_vax))
+        .filter(F.col("_row_num") == 1)
+        .drop("_row_num")
+        .withColumn(
+            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
+        )
+        .withColumn("_silver_version", F.lit(1))
+    )
+
+    print(f"Vaccination silver row count: {vax_silver.count()}")
+
+    vax_silver.writeTo("iceberg.silver.owid_vaccination_silver").tableProperty(
+        "write.format.default", "parquet"
+    ).createOrReplace()
+
+    print("Written to iceberg.silver.owid_vaccination_silver")
+
+    spark.stop()
+
+
+if __name__ == "__main__":
+    transform_owid_to_silver()
+
+```
+
+### silver_transform/scd2.py
+
+```python
+from spark_session import get_spark
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+from datetime import date
+
+def build_scd2_table(source_table: str, target_table: str,
+                     key_cols: list, value_cols: list):
+    spark = get_spark("scd2-builder")
+    df = spark.sql(f"SELECT * FROM {source_table}")
+
+    window = Window.partitionBy(*key_cols).orderBy("year")
+
+    scd = (
+        df
+        .withColumn("valid_from", F.col("year").cast("string"))
+        .withColumn("valid_to",
+            F.lead("year", 1).over(window).cast("string"))
+        .withColumn("valid_to",
+            F.when(F.col("valid_to").isNull(),
+                F.lit("9999")).otherwise(F.col("valid_to")))
+        .withColumn("is_current",
+            F.col("valid_to") == F.lit("9999"))
+        .withColumn("_scd_hash",
+            F.md5(F.concat_ws("|",
+                *[F.col(c).cast("string") for c in value_cols])))
+    )
+
+    scd.writeTo(target_table) \
+       .tableProperty("write.format.default", "parquet") \
+       .createOrReplace()
+
+    print(f"SCD2 table written: {target_table}")
+    current_count = scd.filter(F.col("is_current")).count()
+    print(f"  Current records: {current_count}")
+    spark.stop()
+
+if __name__ == "__main__":
+    build_scd2_table(
+        source_table="iceberg.silver.who_gho_silver",
+        target_table="iceberg.silver.who_gho_scd2",
+        key_cols=["indicator_code", "country_code", "sex"],
+        value_cols=["value", "low", "high"],
+    )
+```
+
+### silver_transform/spark_session.py
+
+```python
+from pyspark.sql import SparkSession
+import os
+
+
+def get_spark(app_name: str = "health-lakehouse") -> SparkSession:
+    return (
+        SparkSession.builder.appName(app_name)
+        .config(
+            "spark.jars.packages",
+            ",".join(
+                [
+                    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0",
+                    "org.apache.hadoop:hadoop-aws:3.3.4",
+                    "com.amazonaws:aws-java-sdk-bundle:1.12.262",
+                    "software.amazon.awssdk:bundle:2.20.160",
+                ]
+            ),
+        )
+        # ADD THESE TWO LINES
+        .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
+        .config("spark.executor.extraJavaOptions", "-Daws.region=us-east-1")
+        .config(
+            "spark.sql.extensions",
+            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+        )
+        .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.iceberg.type", "rest")
+        .config(
+            "spark.sql.catalog.iceberg.uri",
+            os.getenv("ICEBERG_REST_URI", "http://localhost:8181"),
+        )
+        .config(
+            "spark.sql.catalog.iceberg.io-impl",
+            "org.apache.iceberg.aws.s3.S3FileIO",
+        )
+        .config(
+            "spark.sql.catalog.iceberg.s3.endpoint",
+            os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+        )
+        .config("spark.sql.catalog.iceberg.s3.access-key-id", "minioadmin")
+        .config("spark.sql.catalog.iceberg.s3.secret-access-key", "minioadmin")
+        .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
+        .config("spark.sql.catalog.iceberg.s3.region", "us-east-1")
+        .config(
+            "spark.hadoop.fs.s3a.endpoint",
+            os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+        )
+        .config("spark.hadoop.fs.s3a.access.key", "minioadmin")
+        .config("spark.hadoop.fs.s3a.secret.key", "minioadmin")
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.aws.region", "us-east-1")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.driver.memory", "4g")
+        .config("spark.executor.memory", "4g")
+        .config("spark.sql.shuffle.partitions", "8")
+        .master("local[*]")
+        .getOrCreate()
+    )
+
+
+if __name__ == "__main__":
+    spark = get_spark("test-connection")
+    df = spark.sql("SHOW NAMESPACES IN iceberg")
+    df.show()
+    spark.stop()
+    print("Spark + Iceberg connection OK")
+
+```
+
+### silver_transform/who_silver.py
+
+```python
+from spark_session import get_spark
+from pyspark.sql import functions as F
+from pyspark.sql.types import IntegerType, DoubleType
+from datetime import datetime, timezone
+
+
+def transform_who_to_silver():
+    spark = get_spark("who-bronze-to-silver")
+    print("Reading bronze.who_gho_raw...")
+
+    bronze = spark.sql("SELECT * FROM iceberg.bronze.who_gho_raw")
+    print(f"Bronze row count: {bronze.count()}")
+
+    silver = (
+        bronze
+        # --- type coercion ---
+        .withColumn("year", F.col("year").cast(IntegerType()))
+        .withColumn("value", F.col("value").cast(DoubleType()))
+        .withColumn("low", F.col("low").cast(DoubleType()))
+        .withColumn("high", F.col("high").cast(DoubleType()))
+        # --- country code normalization: uppercase, trim whitespace ---
+        .withColumn("country_code", F.upper(F.trim(F.col("country_code"))))
+        # --- drop rows with no country or no year (unusable for analysis) ---
+        .filter(F.col("country_code").isNotNull())
+        .filter(F.col("year").isNotNull())
+        .filter(F.col("indicator_code").isNotNull())
+        # --- clip obviously bad values ---
+        .withColumn("value", F.when(F.col("value") < 0, None).otherwise(F.col("value")))
+        # --- standardize sex field ---
+        .withColumn(
+            "sex",
+            F.when(F.col("sex") == "BTSX", "both")
+            .when(F.col("sex") == "MLE", "male")
+            .when(F.col("sex") == "FMLE", "female")
+            .otherwise(F.col("sex")),
+        )
+        # --- deduplication: keep latest ingested record per key ---
+        .withColumn(
+            "_row_num",
+            F.row_number().over(
+                __import__("pyspark.sql.window", fromlist=["Window"])
+                .Window.partitionBy("indicator_code", "country_code", "year", "sex")
+                .orderBy(F.col("_ingested_at").desc())
+            ),
+        )
+        .filter(F.col("_row_num") == 1)
+        .drop("_row_num")
+        # --- add silver metadata ---
+        .withColumn(
+            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
+        )
+        .withColumn("_silver_version", F.lit(1))
+    )
+
+    print(f"Silver row count after cleaning: {silver.count()}")
+
+    silver.writeTo("iceberg.silver.who_gho_silver").tableProperty(
+        "write.format.default", "parquet"
+    ).createOrReplace()
+
+    print("Written to iceberg.silver.who_gho_silver")
+    spark.stop()
+
+
+if __name__ == "__main__":
+    transform_who_to_silver()
+
+```

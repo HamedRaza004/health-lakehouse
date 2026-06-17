@@ -6,3 +6,4 @@ catalog:
     s3.access-key-id: minioadmin
     s3.secret-access-key: minioadmin
     s3.path-style-access: "true"
+    s3.region: us-east-1

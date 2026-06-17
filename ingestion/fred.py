@@ -16,7 +16,13 @@ CATALOG_CONFIG = {
 
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 FRED_API_KEY = os.getenv("FRED_API_KEY")
-SERIES_IDS = ["HLTHSCPCHCSA", "PPAACH", "UNRATE", "GDPC1", "POPTHM"]
+
+# each series gets its own bronze table
+SERIES_TABLE_MAP = {
+    "UNRATE": "bronze.fred_unrate_raw",
+    "CPIAUCSL": "bronze.fred_cpiaucsl_raw",
+    "DGS10": "bronze.fred_dgs10_raw",
+}
 
 
 def fetch_series(series_id: str) -> list[dict]:
@@ -37,12 +43,15 @@ def run():
     catalog = load_catalog("default", **CATALOG_CONFIG)
     now = datetime.now(timezone.utc).isoformat()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    all_rows = []
-    for sid in SERIES_IDS:
+
+    for sid, table_name in SERIES_TABLE_MAP.items():
         print(f"  Fetching FRED series: {sid}")
         obs = fetch_series(sid)
+        print(f"  Got {len(obs)} observations for {sid}")
+
+        rows = []
         for o in obs:
-            all_rows.append(
+            rows.append(
                 {
                     "series_id": sid,
                     "date": o.get("date"),
@@ -54,18 +63,24 @@ def run():
                     "_ingestion_date": today,
                 }
             )
-    df = pd.DataFrame(all_rows)
-    print(f"Total FRED rows: {len(df)}")
-    arrow_table = pa.Table.from_pandas(df, preserve_index=False)
-    table_name = "bronze.fred_macro_raw"
-    if catalog.table_exists(table_name):
-        catalog.load_table(table_name).append(arrow_table)
-    else:
-        tbl = catalog.create_table(
-            table_name, schema=None, location="s3://lakehouse/bronze/fred_macro_raw"
-        )
-        tbl.append(arrow_table)
-    print("Done.")
+
+        df = pd.DataFrame(rows)
+        arrow_table = pa.Table.from_pandas(df, preserve_index=False)
+        location = f"s3://lakehouse/bronze/{table_name.split('.')[1]}"
+
+        if catalog.table_exists(table_name):
+            catalog.load_table(table_name).append(arrow_table)
+            print(f"  Appended {len(df)} rows → {table_name}")
+        else:
+            tbl = catalog.create_table(
+                table_name,
+                schema=None,
+                location=location,
+            )
+            tbl.append(arrow_table)
+            print(f"  Created and wrote {len(df)} rows → {table_name}")
+
+    print("FRED ingestion done.")
 
 
 if __name__ == "__main__":

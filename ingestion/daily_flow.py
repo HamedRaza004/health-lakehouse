@@ -3,6 +3,14 @@ from prefect.tasks import task_input_hash
 from datetime import timedelta, datetime, timezone
 from pathlib import Path
 import os
+import sys
+
+sys.path.append("../great_expectations")
+sys.path.append("../silver_transform")
+
+from bronze_checks import run_bronze_checks
+from silver_checks import run_silver_checks
+from bronze_to_silver import run_all_silver_transforms
 
 import who_gho
 import cdc_nndss
@@ -190,13 +198,21 @@ def validate_bronze_counts():
     """
     catalog = _get_catalog()
     logger = get_run_logger()
+    print("Namespaces:")
+    print(catalog.list_namespaces())
+
+    print("Bronze tables:")
+    print(catalog.list_tables("bronze"))
+
     tables = [
         "bronze.who_gho_raw",
         "bronze.cdc_nndss_raw",
         "bronze.owid_covid_raw",
         "bronze.owid_vaccination_raw",
-        "bronze.fred_macro_raw",
-        "bronze.fda_adverse_events_raw",
+        "bronze.fred_unrate_raw",  # ← was fred_macro_raw
+        "bronze.fred_cpiaucsl_raw",  # ← new
+        "bronze.fred_dgs10_raw",
+        "bronze.openfda_drug_event_raw",  # fixed from fda_adverse_events_raw
     ]
     for t in tables:
         _safe_table_info(catalog, t, logger)
@@ -207,34 +223,51 @@ def validate_bronze_counts():
 # ---------------------------------------------------------------------------
 
 
-@flow(
-    name="daily-health-ingestion",
-    description="Ingest all public health sources into bronze Iceberg tables",
-)
+@task(name="bronze-quality-gate")
+def bronze_quality_gate():
+    logger = get_run_logger()
+    passed = run_bronze_checks()
+    if not passed:
+        raise ValueError("Bronze quality checks FAILED — blocking silver promotion")
+    logger.info("Bronze quality gate PASSED")
+
+
+@task(name="run-silver-transforms")
+def run_silver_transforms():
+    logger = get_run_logger()
+    logger.info("Running all bronze → silver transforms")
+    run_all_silver_transforms()
+    logger.info("Silver transforms complete")
+
+
+@task(name="silver-quality-gate")
+def silver_quality_gate():
+    logger = get_run_logger()
+    passed = run_silver_checks()
+    if not passed:
+        raise ValueError("Silver quality checks FAILED — blocking gold promotion")
+    logger.info("Silver quality gate PASSED")
+
+
+@flow(name="daily-health-ingestion")
 def daily_ingestion_flow():
     logger = get_run_logger()
-    logger.info("Starting daily ingestion flow")
 
-    # FIX 4 — Parallelism strategy:
-    #
-    #   PARALLEL  : WHO + FRED  — lightweight payloads, low RAM, low rate-limit risk
-    #   SEQUENTIAL: CDC → OWID → OpenFDA — large downloads, run one at a time
-    #               to avoid RAM exhaustion and simultaneous API rate-limit hits
-    #
-    who_future = ingest_who.submit()
-    fred_future = ingest_fred.submit()
-
-    # Wait for the light tasks to finish first
-    who_future.result(raise_on_failure=False)
-    fred_future.result(raise_on_failure=False)
-
-    # Heavy tasks run sequentially to protect memory and API quotas
-    ingest_cdc()
-    ingest_owid()
-    ingest_openfda()
+    # --- temporarily skip ingestion, data already in bronze ---
+    # who_future  = ingest_who.submit()
+    # fred_future = ingest_fred.submit()
+    # who_future.result(raise_on_failure=False)
+    # fred_future.result(raise_on_failure=False)
+    # ingest_cdc()
+    # ingest_owid()
+    # ingest_openfda()
 
     validate_bronze_counts()
-    logger.info("Daily ingestion flow complete")
+    bronze_quality_gate()
+    run_silver_transforms()
+    silver_quality_gate()
+
+    logger.info("Pipeline complete through silver layer")
 
 
 if __name__ == "__main__":
