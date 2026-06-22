@@ -53,9 +53,7 @@ def transform_cdc_to_silver():
                 F.col("current_week") > 3 * F.col("rolling_avg_cases"), True
             ).otherwise(False),
         )
-        .withColumn(
-            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_silver_processed_at", F.current_timestamp())
         .withColumn("_silver_version", F.lit(1))
     )
 

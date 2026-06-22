@@ -46,9 +46,7 @@ def transform_who_to_silver():
         .filter(F.col("_row_num") == 1)
         .drop("_row_num")
         # --- add silver metadata ---
-        .withColumn(
-            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_silver_processed_at", F.current_timestamp())
         .withColumn("_silver_version", F.lit(1))
     )
 

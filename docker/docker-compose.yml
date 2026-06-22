@@ -98,6 +98,17 @@ services:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
 
+  trino:
+      image: trinodb/trino:435
+      container_name: trino
+      ports:
+        - "8085:8080"
+      volumes:
+        - ../docker/trino/catalog:/etc/trino/catalog
+      depends_on:
+        - iceberg-rest
+        - minio
+
 volumes:
   minio_data:
   prefect_data:

@@ -66,7 +66,9 @@ BRONZE_TABLES = [
     ("bronze.cdc_nndss_raw", "bronze/cdc_nndss_raw"),
     ("bronze.owid_covid_raw", "bronze/owid_covid_raw"),
     ("bronze.owid_vaccination_raw", "bronze/owid_vaccination_raw"),
-    ("bronze.fred_macro_raw", "bronze/fred_macro_raw"),
+    ("bronze.fred_unrate_raw", "bronze/fred_unrate_raw"),
+    ("bronze.fred_cpiaucsl_raw", "bronze/fred_cpiaucsl_raw"),
+    ("bronze.fred_dgs10_raw", "bronze/fred_dgs10_raw"),
     ("bronze.openfda_drug_event_raw", "bronze/openfda_drug_event_raw"),
 ]
 
@@ -88,8 +90,4 @@ for table_name, prefix in BRONZE_TABLES:
 print("\n--- Verifying registrations ---")
 for table_name, _ in BRONZE_TABLES:
     exists = catalog.table_exists(table_name)
-    if exists:
-        count = catalog.load_table(table_name).scan().to_arrow().num_rows
-        print(f"  {table_name}: {count:,} rows")
-    else:
-        print(f"  MISSING: {table_name}")
+    print(f"{table_name}: {'REGISTERED' if exists else 'MISSING'}")

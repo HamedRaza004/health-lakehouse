@@ -72,9 +72,7 @@ def transform_fda_to_silver():
         .withColumn("_row_num", F.row_number().over(window_dedup))
         .filter(F.col("_row_num") == 1)
         .drop("_row_num")
-        .withColumn(
-            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_silver_processed_at", F.current_timestamp())
         .withColumn("_silver_version", F.lit(1))
     )
 

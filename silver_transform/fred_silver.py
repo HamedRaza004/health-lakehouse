@@ -91,9 +91,7 @@ def transform_single_fred(spark, bronze_table: str, silver_table: str):
             ).otherwise(None),
         )
         .drop("prev_year_value")
-        .withColumn(
-            "_silver_processed_at", F.lit(datetime.now(timezone.utc).isoformat())
-        )
+        .withColumn("_silver_processed_at", F.current_timestamp())
         .withColumn("_silver_version", F.lit(1))
     )
 
