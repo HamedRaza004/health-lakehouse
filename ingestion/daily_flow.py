@@ -3,6 +3,8 @@ from prefect.tasks import task_input_hash
 from datetime import timedelta, datetime, timezone
 from pathlib import Path
 import os
+import requests as http_requests
+import subprocess
 import sys
 
 sys.path.append("../great_expectations")
@@ -17,6 +19,8 @@ import cdc_nndss
 import owid
 import fred
 import openfda
+
+DBT_PROJECT_DIR = Path(__file__).parent.parent / "dbt_project"
 
 # ---------------------------------------------------------------------------
 # Local cache directory — sits next to this file at runtime
@@ -249,6 +253,119 @@ def silver_quality_gate():
     logger.info("Silver quality gate PASSED")
 
 
+@task(name="dbt-gold-run")
+def run_dbt_gold():
+    logger = get_run_logger()
+    logger.info("Running dbt gold models...")
+
+    result = subprocess.run(
+        ["dbt", "run", "--project-dir", str(DBT_PROJECT_DIR)],
+        capture_output=True,
+        text=True,
+    )
+    logger.info(result.stdout)
+    if result.returncode != 0:
+        logger.error(result.stderr)
+        raise RuntimeError(f"dbt run failed:\n{result.stderr}")
+    logger.info("dbt run complete")
+
+
+@task(name="dbt-gold-test")
+def run_dbt_tests():
+    logger = get_run_logger()
+    logger.info("Running dbt tests...")
+
+    result = subprocess.run(
+        ["dbt", "test", "--project-dir", str(DBT_PROJECT_DIR)],
+        capture_output=True,
+        text=True,
+    )
+    logger.info(result.stdout)
+    if result.returncode != 0:
+        logger.warning(f"Some dbt tests failed:\n{result.stderr}")
+        # warn but don't block - test failures are informational
+    logger.info("dbt test complete")
+
+
+@task(name="dbt-source-freshness")
+def run_dbt_freshness():
+    logger = get_run_logger()
+    result = subprocess.run(
+        ["dbt", "source", "freshness", "--project-dir", str(DBT_PROJECT_DIR)],
+        capture_output=True,
+        text=True,
+    )
+    logger.info(result.stdout)
+    logger.info("Source freshness check complete")
+
+
+@task(name="outbreak-alert-check")
+def check_outbreak_alerts():
+    logger = get_run_logger()
+    slack_url = os.getenv("SLACK_WEBHOOK_URL")
+
+    import trino
+
+    conn = trino.dbapi.connect(
+        host="localhost",
+        port=8085,
+        user="hamed",
+        catalog="iceberg",
+        schema="gold",
+    )
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT condition, reporting_area, year, week,
+               current_week_cases, severity,
+               cases_vs_rolling_avg_ratio
+        FROM gold.outbreak_alerts
+        WHERE severity IN ('critical', 'high')
+        ORDER BY
+            CASE severity WHEN 'critical' THEN 1 ELSE 2 END,
+            cases_vs_rolling_avg_ratio DESC
+        LIMIT 10
+    """
+    )
+    cols = [d[0] for d in cur.description]
+    alerts = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    if not alerts:
+        logger.info("No critical/high alerts found")
+        return
+
+    logger.warning(f"Found {len(alerts)} active alerts")
+
+    if not slack_url:
+        logger.warning("SLACK_WEBHOOK_URL not set - skipping notification")
+        for alert in alerts:
+            logger.warning(
+                f"ALERT [{alert['severity'].upper()}] "
+                f"{alert['condition']} in {alert['reporting_area']}: "
+                f"{alert['current_week_cases']} cases "
+                f"({alert['cases_vs_rolling_avg_ratio']}x avg)"
+            )
+        return
+
+    lines = [f"*Health Lakehouse - Outbreak Alerts* ({len(alerts)} active)\n"]
+    for alert in alerts:
+        emoji = ":red_circle:" if alert["severity"] == "critical" else ":orange_circle:"
+        lines.append(
+            f"{emoji} *{alert['severity'].upper()}* | "
+            f"{alert['condition']} - {alert['reporting_area']} | "
+            f"Week {alert['week']}/{alert['year']} | "
+            f"{int(alert['current_week_cases'])} cases "
+            f"({alert['cases_vs_rolling_avg_ratio']}x rolling avg)"
+        )
+
+    payload = {"text": "\n".join(lines)}
+    resp = http_requests.post(slack_url, json=payload, timeout=10)
+    if resp.status_code == 200:
+        logger.info("Slack alert sent successfully")
+    else:
+        logger.warning(f"Slack notification failed: {resp.status_code}")
+
+
 @flow(name="daily-health-ingestion")
 def daily_ingestion_flow():
     logger = get_run_logger()
@@ -267,7 +384,13 @@ def daily_ingestion_flow():
     run_silver_transforms()
     silver_quality_gate()
 
-    logger.info("Pipeline complete through silver layer")
+    # --- week 4 additions ---
+    run_dbt_freshness()
+    run_dbt_gold()
+    run_dbt_tests()
+    check_outbreak_alerts()
+
+    logger.info("Full pipeline complete")
 
 
 if __name__ == "__main__":
